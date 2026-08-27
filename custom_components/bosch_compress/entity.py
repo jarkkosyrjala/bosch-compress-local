@@ -29,10 +29,13 @@ DEFAULT_ENABLED_ENDPOINTS: Final = frozenset(
         "/heatingCircuits/hc1/actualSupplyTemperature",
         "/heatingCircuits/hc1/currentRoomSetpoint",
         "/heatingCircuits/hc1/roomtemperature",
+        "/heatingCircuits/hc1/supplyTemperatureSetpoint",
         "/heatingCircuits/hc2/actualSupplyTemperature",
         "/heatingCircuits/hc2/currentRoomSetpoint",
         "/heatingCircuits/hc2/roomtemperature",
+        "/heatingCircuits/hc2/supplyTemperatureSetpoint",
         "/notifications",
+        "/system/appliance/actualSupplyTemperature",
         "/system/healthStatus",
         "/system/sensors/temperatures/outdoor_t1",
     }

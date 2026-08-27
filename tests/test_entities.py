@@ -21,6 +21,7 @@ from custom_components.bosch_compress.h60 import H60_REGISTERS
 from custom_components.bosch_compress.models import BoschEndpoint
 from custom_components.bosch_compress.runtime import BoschRuntimeData
 from custom_components.bosch_compress.select import H60SupplementalSelect
+from custom_components.bosch_compress.sensor import BoschEndpointSensor
 from custom_components.bosch_compress.switch import H60SupplementalSwitch
 from custom_components.bosch_compress.water_heater import BoschDhwWaterHeater
 
@@ -141,6 +142,23 @@ def test_two_heating_circuits_keep_independent_climate_state() -> None:
     assert hc2.target_temperature == 20.0
     assert hc2.hvac_mode is HVACMode.AUTO
     assert hc2.hvac_action is HVACAction.IDLE
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/system/appliance/actualSupplyTemperature",
+        "/heatingCircuits/hc1/supplyTemperatureSetpoint",
+        "/heatingCircuits/hc2/supplyTemperatureSetpoint",
+    ],
+)
+def test_dashboard_supply_temperature_sensors_are_enabled_by_default(
+    path: str,
+) -> None:
+    """Keep every Bosch supply-temperature sensor consumed by the dashboard."""
+    entity = BoschEndpointSensor(_runtime({path: 30.0}), path)
+
+    assert entity.entity_registry_enabled_default is True
 
 
 @pytest.mark.parametrize(
