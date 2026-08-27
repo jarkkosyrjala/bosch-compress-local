@@ -1,0 +1,43 @@
+[project]
+name = "bosch-compress-local"
+version = "0.1.0"
+description = "Local Bosch Compress integration for Home Assistant"
+readme = "README.md"
+requires-python = ">=3.14.2"
+dependencies = [
+  "homeassistant==2026.8.3",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=9.0.0",
+  "ruff>=0.16.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+required-version = ">=0.16.0"
+target-version = "py314"
+
+[tool.ruff.lint]
+select = [
+  "ASYNC",
+  "B",
+  "D",
+  "E",
+  "F",
+  "I",
+  "LOG",
+  "RUF",
+  "UP",
+  "W",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+

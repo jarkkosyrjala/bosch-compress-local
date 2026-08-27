@@ -1,0 +1,2 @@
+"""The Bosch Compress integration."""
+

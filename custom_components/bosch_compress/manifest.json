@@ -1,0 +1,9 @@
+{
+  "domain": "bosch_compress",
+  "name": "Bosch Compress",
+  "codeowners": ["@jarkkosyrjala"],
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "version": "0.1.0"
+}
+

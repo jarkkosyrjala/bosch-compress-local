@@ -1,0 +1,29 @@
+# Local agent instructions and environment-specific connection details
+/AGENTS.md
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.coverage
+htmlcov/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# Local Home Assistant runtime data
+/config/
+/.storage/
+home-assistant.log*
+home-assistant_v2.db*
+secrets.yaml
+
+# Local environment files
+.env
+.env.local
+
