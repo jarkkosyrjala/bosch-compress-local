@@ -5,10 +5,7 @@ from pathlib import Path
 from typing import Any
 
 MANIFEST_PATH = (
-    Path(__file__).parents[1]
-    / "custom_components"
-    / "bosch_compress"
-    / "manifest.json"
+    Path(__file__).parents[1] / "custom_components" / "bosch_compress" / "manifest.json"
 )
 
 

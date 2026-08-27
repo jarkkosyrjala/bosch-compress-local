@@ -1,5 +1,6 @@
 # Local agent instructions and environment-specific connection details
 /AGENTS.md
+/.local/
 
 # Editors and operating systems
 .DS_Store
@@ -26,4 +27,3 @@ secrets.yaml
 # Local environment files
 .env
 .env.local
-

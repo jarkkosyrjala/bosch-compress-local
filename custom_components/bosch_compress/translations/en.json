@@ -1,0 +1,47 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "This Bosch gateway is already configured",
+      "reauth_successful": "Authentication updated successfully"
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the Bosch gateway",
+      "invalid_input": "Enter a valid IP-module address and MQTT topic prefix",
+      "invalid_auth": "Invalid login name or password",
+      "unknown": "Unexpected error",
+      "wrong_gateway": "The address belongs to a different Bosch gateway"
+    },
+    "step": {
+      "reauth_confirm": {
+        "data": {
+          "access_token": "Login name",
+          "password": "Password"
+        },
+        "description": "Enter the updated credentials for the Bosch IP module.",
+        "title": "Update Bosch authentication"
+      },
+      "user": {
+        "data": {
+          "access_token": "Login name",
+          "h60_topic_prefix": "H60 MQTT topic prefix (optional)",
+          "host": "Bosch IP module address",
+          "password": "Password"
+        },
+        "description": "Connect directly to the Bosch IP module. Add the H60 MQTT topic prefix only when the H60 supplemental registers are needed.",
+        "title": "Bosch Compress"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "h60_topic_prefix": "H60 MQTT topic prefix (optional)",
+          "host": "Bosch IP module address"
+        },
+        "description": "Changing these values reloads the integration.",
+        "title": "Bosch Compress options"
+      }
+    }
+  }
+}
