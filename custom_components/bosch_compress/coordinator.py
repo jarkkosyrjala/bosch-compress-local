@@ -11,6 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .api import (
     BoschApiError,
@@ -22,7 +23,13 @@ from .models import BoschEndpoint
 
 _LOGGER = logging.getLogger(__name__)
 
-CORE_POLL_PATHS: Final = frozenset({"/gateway/uuid"})
+ENERGY_RECORDING_PATHS: Final = frozenset(
+    {
+        "/recordings/heatSources/total/energyMonitoring/compressor",
+        "/recordings/heatSources/total/energyMonitoring/eheater",
+    }
+)
+CORE_POLL_PATHS: Final = frozenset({"/gateway/uuid", *ENERGY_RECORDING_PATHS})
 DEFAULT_UPDATE_INTERVAL: Final = timedelta(seconds=60)
 
 
@@ -56,6 +63,14 @@ class BoschDataUpdateCoordinator(DataUpdateCoordinator[dict[str, BoschEndpoint]]
     async def _async_setup(self) -> None:
         """Discover the gateway endpoint tree once before the first refresh."""
         self.discovered_endpoints = await self.client.async_discover_endpoints()
+        for path in ENERGY_RECORDING_PATHS:
+            self.discovered_endpoints[path] = BoschEndpoint(
+                path=path,
+                value=None,
+                value_type="floatValue",
+                writable=False,
+                unit="kWh",
+            )
 
     @callback
     def register_path(self, path: str) -> Callable[[], None]:
@@ -96,10 +111,21 @@ class BoschDataUpdateCoordinator(DataUpdateCoordinator[dict[str, BoschEndpoint]]
         data = dict(self.data or self.discovered_endpoints)
         errors: dict[str, BoschApiError] = {}
         successful_requests = 0
+        today = dt_util.now().date()
 
         for path in sorted(self._poll_paths()):
             try:
-                data[path] = await self.client.async_get_endpoint(path)
+                if path in ENERGY_RECORDING_PATHS:
+                    value = await self.client.async_get_daily_energy(path, today)
+                    data[path] = BoschEndpoint(
+                        path=path,
+                        value=value,
+                        value_type="floatValue",
+                        writable=False,
+                        unit="kWh",
+                    )
+                else:
+                    data[path] = await self.client.async_get_endpoint(path)
                 successful_requests += 1
             except BoschApiError as error:
                 errors[path] = error

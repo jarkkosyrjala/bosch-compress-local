@@ -8,6 +8,9 @@ from typing import Any, cast
 
 import pytest
 from homeassistant.components.climate import HVACAction, HVACMode
+from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+from homeassistant.const import UnitOfEnergy
+from homeassistant.util import slugify
 
 from custom_components.bosch_compress.climate import (
     BoschHeatingCircuitClimate,
@@ -130,3 +133,43 @@ def test_dashboard_supply_temperature_sensors_are_enabled_by_default(
     entity = BoschEndpointSensor(_runtime({path: 30.0}), path)
 
     assert entity.entity_registry_enabled_default is True
+
+
+@pytest.mark.parametrize(
+    ("path", "name", "object_id"),
+    [
+        (
+            "/recordings/heatSources/total/energyMonitoring/compressor",
+            "Compressor energy today",
+            "bosch_compress_compressor_energy_today",
+        ),
+        (
+            "/recordings/heatSources/total/energyMonitoring/eheater",
+            "Auxiliary heater energy today",
+            "bosch_compress_auxiliary_heater_energy_today",
+        ),
+    ],
+)
+def test_daily_energy_sensors_have_energy_dashboard_metadata(
+    path: str, name: str, object_id: str
+) -> None:
+    """Native current-day totals are enabled Energy-compatible counters."""
+    runtime = _runtime({})
+    runtime.coordinator.discovered_endpoints[path] = BoschEndpoint(
+        path=path,
+        value=3.5,
+        value_type="floatValue",
+        writable=False,
+        unit="kWh",
+    )
+
+    entity = BoschEndpointSensor(runtime, path)
+
+    assert entity.name == name
+    assert slugify(f"Bosch Compress {entity.suggested_object_id}") == object_id
+    assert entity.native_value == 3.5
+    assert entity.device_class is SensorDeviceClass.ENERGY
+    assert entity.native_unit_of_measurement == UnitOfEnergy.KILO_WATT_HOUR
+    assert entity.state_class is SensorStateClass.TOTAL_INCREASING
+    assert entity.entity_registry_enabled_default is True
+    assert entity.entity_category is None

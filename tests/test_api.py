@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date, datetime
 from typing import Any
 
 import pytest
@@ -52,12 +53,14 @@ class FakeSession:
         """Initialize canned responses."""
         self.responses = responses
         self.requested: list[str] = []
+        self.get_kwargs: list[dict[str, Any]] = []
         self.puts: list[tuple[str, bytes]] = []
 
-    def get(self, url: str, **_kwargs: Any) -> FakeResponse:
+    def get(self, url: str, **kwargs: Any) -> FakeResponse:
         """Return a canned GET response."""
         path = "/" + url.split("/", 3)[-1]
         self.requested.append(path)
+        self.get_kwargs.append(kwargs)
         response = self.responses[path]
         if isinstance(response, Exception):
             raise response
@@ -220,3 +223,81 @@ def test_default_discovery_includes_notification_history_not_recordings() -> Non
     """Current diagnostics are discoverable without crawling archived recordings."""
     assert "/notifications" in KNOWN_DISCOVERY_ROOTS
     assert "/recordings" not in KNOWN_DISCOVERY_ROOTS
+
+
+def test_daily_energy_uses_explicit_date_query_and_sums_hourly_buckets() -> None:
+    """Daily recording queries are safe and return Bosch y/c energy in kWh."""
+    encryption = BoschEncryption("token", "password")
+    path = "/recordings/heatSources/total/energyMonitoring/compressor"
+    session = FakeSession(
+        {
+            path: encrypted_response(
+                encryption,
+                {
+                    "id": f"{path}?interval=2026-8-28",
+                    "type": "yRecording",
+                    "interval": "2026-8-28",
+                    "recording": [
+                        {"y": 60, "c": 60},
+                        {"y": 30, "c": 60},
+                        {"y": 0, "c": 0},
+                        {"y": 1, "c": 0},
+                    ],
+                },
+            )
+        }
+    )
+    client = BoschClient(session, "gateway", "token", "password")  # type: ignore[arg-type]
+
+    energy = asyncio.run(client.async_get_daily_energy(path, date(2026, 8, 28)))
+
+    assert energy == 1.5
+    assert session.requested == [path]
+    assert session.get_kwargs[0]["params"] == {"interval": "2026-8-28"}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"type": "yRecording", "interval": "2026-8-27", "recording": []},
+        {
+            "type": "yRecording",
+            "interval": "2026-8-28",
+            "recording": [{"y": 1, "c": -1}],
+        },
+        {
+            "type": "yRecording",
+            "interval": "2026-8-28",
+            "recording": [{"y": True, "c": 1}],
+        },
+    ],
+)
+def test_daily_energy_rejects_stale_or_invalid_recordings(payload: Any) -> None:
+    """Malformed or stale recording payloads never become plausible energy data."""
+    encryption = BoschEncryption("token", "password")
+    path = "/recordings/heatSources/total/energyMonitoring/compressor"
+    session = FakeSession({path: encrypted_response(encryption, payload)})
+    client = BoschClient(session, "gateway", "token", "password")  # type: ignore[arg-type]
+
+    with pytest.raises(BoschResponseError):
+        asyncio.run(client.async_get_daily_energy(path, date(2026, 8, 28)))
+
+
+def test_daily_energy_requires_a_calendar_date_and_safe_base_path() -> None:
+    """Recording callers cannot inject query parameters or ambiguous datetimes."""
+    client = BoschClient(FakeSession({}), "gateway", "token", "password")  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError):
+        asyncio.run(
+            client.async_get_daily_energy(
+                "/recordings/value?interval=other",
+                date(2026, 8, 28),
+            )
+        )
+    with pytest.raises(ValueError):
+        asyncio.run(
+            client.async_get_daily_energy(
+                "/recordings/value",
+                datetime(2026, 8, 28),  # type: ignore[arg-type]
+            )
+        )

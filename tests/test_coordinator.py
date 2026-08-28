@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date
 from unittest.mock import AsyncMock
 
 import pytest
@@ -13,7 +14,10 @@ from custom_components.bosch_compress.api import (
     BoschConnectionError,
     BoschForbiddenError,
 )
-from custom_components.bosch_compress.coordinator import BoschDataUpdateCoordinator
+from custom_components.bosch_compress.coordinator import (
+    ENERGY_RECORDING_PATHS,
+    BoschDataUpdateCoordinator,
+)
 from custom_components.bosch_compress.models import BoschEndpoint
 
 
@@ -40,6 +44,11 @@ class FakeClient:
             "/failing": BoschForbiddenError("forbidden"),
         }
         self.writes: list[tuple[str, object]] = []
+        self.energy = {
+            path: 2.5 if path.endswith("/compressor") else 0.5
+            for path in ENERGY_RECORDING_PATHS
+        }
+        self.energy_requests: list[tuple[str, date]] = []
 
     async def async_discover_endpoints(self) -> dict[str, BoschEndpoint]:
         """Return fake discovery data."""
@@ -55,6 +64,14 @@ class FakeClient:
     async def async_put(self, path: str, value: object) -> None:
         """Record a fake endpoint write."""
         self.writes.append((path, value))
+
+    async def async_get_daily_energy(self, path: str, day: date) -> float:
+        """Return a fake current-day energy total."""
+        self.energy_requests.append((path, day))
+        response = self.energy[path]
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def test_coordinator_discovers_and_polls_only_registered_paths() -> None:
@@ -76,12 +93,24 @@ def test_coordinator_discovers_and_polls_only_registered_paths() -> None:
         data = await coordinator._async_update_data()
 
         assert data["/optional"].value == 3
+        assert (
+            data["/recordings/heatSources/total/energyMonitoring/compressor"].value
+            == 2.5
+        )
+        assert (
+            data["/recordings/heatSources/total/energyMonitoring/eheater"].value == 0.5
+        )
+        assert {path for path, _day in client.energy_requests} == ENERGY_RECORDING_PATHS
         assert "/failing" not in coordinator.endpoint_errors
         remove_listener()
         unregister = coordinator.register_path("/optional")
-        assert coordinator._poll_paths() == {"/gateway/uuid", "/optional"}
+        assert coordinator._poll_paths() == {
+            "/gateway/uuid",
+            "/optional",
+            *ENERGY_RECORDING_PATHS,
+        }
         unregister()
-        assert coordinator._poll_paths() == {"/gateway/uuid"}
+        assert coordinator._poll_paths() == {"/gateway/uuid", *ENERGY_RECORDING_PATHS}
 
     asyncio.run(run_test())
 
@@ -158,6 +187,8 @@ def test_coordinator_fails_when_gateway_is_unreachable() -> None:
         hass = HomeAssistant("/tmp")
         client = FakeClient()
         client.responses["/gateway/uuid"] = BoschConnectionError("offline")
+        for path in ENERGY_RECORDING_PATHS:
+            client.energy[path] = BoschConnectionError("offline")
         coordinator = BoschDataUpdateCoordinator(
             hass,
             client,  # type: ignore[arg-type]

@@ -26,7 +26,10 @@ or unverified Bosch entities are disabled by default.
 The default Bosch set includes both heating circuits, domestic hot water, outdoor
 and circuit temperatures, heat-source supply/return temperatures, compressor
 modulation and derived running state, DHW setpoints, and clearly identified gateway
-health/notification-history diagnostics.
+health/notification-history diagnostics. It also includes current-day compressor
+and auxiliary-heater energy totals from the IP module's hourly recordings. These
+energy sensors use kWh and Home Assistant's `total_increasing` state class, so they
+can be selected directly in the Energy dashboard.
 
 Bosch notification records are historical diagnostics. They are not treated as a
 live alarm, and the integration does not infer a current alarm from notification

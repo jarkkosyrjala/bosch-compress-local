@@ -9,6 +9,8 @@ import hashlib
 import json
 from collections import deque
 from collections.abc import Collection, Mapping
+from datetime import date, datetime
+from math import fsum
 from typing import Any, Final
 from urllib.parse import unquote
 
@@ -156,21 +158,85 @@ class BoschClient:
 
     async def async_get(self, path: str) -> Any:
         """Read and decrypt one endpoint."""
+        path = self._validate_path(path)
+        return await self._async_get(path)
+
+    async def async_get_daily_energy(self, path: str, day: date) -> float:
+        """Return one calendar day's energy recording in kWh.
+
+        The Bosch gateway requires an unpadded ``YYYY-M-D`` interval query and
+        reports each hourly bucket as ``y / c`` kWh. The query is assembled from
+        a real date instead of accepting an arbitrary query string.
+        """
+        path = self._validate_path(path)
+        if not isinstance(day, date) or isinstance(day, datetime):
+            raise ValueError("Bosch recording interval must be a calendar date")
+        interval = f"{day.year}-{day.month}-{day.day}"
+        request_path = f"{path}?interval={interval}"
+        response = await self._async_get(
+            path,
+            params={"interval": interval},
+            request_path=request_path,
+        )
+        if (
+            not isinstance(response, Mapping)
+            or response.get("type") != "yRecording"
+            or response.get("interval") != interval
+            or not isinstance(response.get("recording"), list)
+        ):
+            raise BoschResponseError(
+                f"Bosch energy recording {request_path} returned invalid metadata"
+            )
+
+        bucket_values: list[float] = []
+        for bucket in response["recording"]:
+            if not isinstance(bucket, Mapping):
+                raise BoschResponseError(
+                    f"Bosch energy recording {request_path} returned invalid data"
+                )
+            numerator = bucket.get("y")
+            denominator = bucket.get("c")
+            if (
+                isinstance(numerator, bool)
+                or not isinstance(numerator, int | float)
+                or isinstance(denominator, bool)
+                or not isinstance(denominator, int | float)
+                or numerator < 0
+                or denominator < 0
+            ):
+                raise BoschResponseError(
+                    f"Bosch energy recording {request_path} returned invalid data"
+                )
+            if denominator:
+                bucket_values.append(numerator / denominator)
+
+        return fsum(bucket_values)
+
+    async def _async_get(
+        self,
+        path: str,
+        *,
+        params: Mapping[str, str] | None = None,
+        request_path: str | None = None,
+    ) -> Any:
+        """Read and decrypt one already validated endpoint request."""
+        request_path = request_path or path
         async with self._request_lock:
             try:
                 async with self._session.get(
                     self._url(path),
                     headers=_HTTP_HEADERS,
+                    params=params,
                     skip_auto_headers={"Accept", "Accept-Encoding"},
                     timeout=self._timeout,
                 ) as response:
-                    await self._raise_for_status(path, response)
+                    await self._raise_for_status(request_path, response)
                     return self._encryption.decrypt_json(await response.text())
             except BoschApiError:
                 raise
             except (ClientError, TimeoutError) as error:
                 raise BoschConnectionError(
-                    f"Unable to read Bosch endpoint {path}"
+                    f"Unable to read Bosch endpoint {request_path}"
                 ) from error
 
     async def async_put(self, path: str, value: Any) -> None:

@@ -21,6 +21,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from .coordinator import ENERGY_RECORDING_PATHS
 from .entity import DEFAULT_ENABLED_ENDPOINTS, BoschEntity, is_binary_endpoint
 from .runtime import BoschConfigEntry, BoschRuntimeData
 
@@ -28,6 +29,14 @@ PARALLEL_UPDATES = 0
 
 _DIAGNOSTIC_ENDPOINTS = frozenset({"/notifications", "/system/healthStatus"})
 _MAX_COMPLEX_ATTRIBUTE_BYTES = 4096
+_ENERGY_RECORDING_NAMES = {
+    "/recordings/heatSources/total/energyMonitoring/compressor": (
+        "Compressor energy today"
+    ),
+    "/recordings/heatSources/total/energyMonitoring/eheater": (
+        "Auxiliary heater energy today"
+    ),
+}
 
 
 def _bounded_complex_value(value: list[Any] | tuple[Any, ...] | dict[str, Any]) -> Any:
@@ -88,13 +97,26 @@ class BoschEndpointSensor(BoschEntity, SensorEntity):
 
     def __init__(self, runtime_data: BoschRuntimeData, path: str) -> None:
         """Initialize an endpoint sensor."""
+        recording_name = _ENERGY_RECORDING_NAMES.get(path)
         super().__init__(
             runtime_data,
             path,
-            name=("Latest stored notification" if path == "/notifications" else None),
-            enabled_default=path in DEFAULT_ENABLED_ENDPOINTS,
+            name=(
+                recording_name
+                if recording_name is not None
+                else "Latest stored notification"
+                if path == "/notifications"
+                else None
+            ),
+            enabled_default=(
+                path in DEFAULT_ENABLED_ENDPOINTS or path in ENERGY_RECORDING_PATHS
+            ),
             diagnostic=(
-                path not in DEFAULT_ENABLED_ENDPOINTS or path in _DIAGNOSTIC_ENDPOINTS
+                (
+                    path not in DEFAULT_ENABLED_ENDPOINTS
+                    and path not in ENERGY_RECORDING_PATHS
+                )
+                or path in _DIAGNOSTIC_ENDPOINTS
             ),
         )
         endpoint = runtime_data.coordinator.discovered_endpoints[path]
@@ -114,6 +136,8 @@ class BoschEndpointSensor(BoschEntity, SensorEntity):
         elif unit == "kWh":
             self._attr_device_class = SensorDeviceClass.ENERGY
             self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+            if endpoint.path in ENERGY_RECORDING_PATHS:
+                self._attr_state_class = SensorStateClass.TOTAL_INCREASING
         elif unit in {"s", "sec"}:
             self._attr_device_class = SensorDeviceClass.DURATION
             self._attr_native_unit_of_measurement = UnitOfTime.SECONDS
