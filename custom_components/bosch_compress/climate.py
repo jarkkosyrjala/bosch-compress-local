@@ -29,6 +29,9 @@ class HeatingCircuitPaths:
     circuit_id: str
     room_temperature: str
     current_room_setpoint: str
+    manual_room_setpoint: str
+    temporary_room_setpoint: str
+    temperature_room_setpoint: str
     actual_supply_temperature: str
     supply_temperature_setpoint: str
     operation_mode: str
@@ -42,6 +45,9 @@ def _circuit_paths(circuit_id: str) -> HeatingCircuitPaths:
         circuit_id=circuit_id,
         room_temperature=f"{base}/roomtemperature",
         current_room_setpoint=f"{base}/currentRoomSetpoint",
+        manual_room_setpoint=f"{base}/manualRoomSetpoint",
+        temporary_room_setpoint=f"{base}/temporaryRoomSetpoint",
+        temperature_room_setpoint=f"{base}/temperatureRoomSetpoint",
         actual_supply_temperature=f"{base}/actualSupplyTemperature",
         supply_temperature_setpoint=f"{base}/supplyTemperatureSetpoint",
         operation_mode=f"{base}/operationMode",
@@ -76,13 +82,36 @@ class BoschHeatingCircuitClimate(BoschEntity, ClimateEntity):
         self._attr_suggested_object_id = f"bosch_compress_{paths.circuit_id}"
         self._attr_min_temp = 13.0
         self._attr_max_temp = 29.0
-        self._attr_supported_features = ClimateEntityFeature(0)
-        if runtime_data.h60 is not None:
-            self._attr_supported_features |= ClimateEntityFeature.TARGET_TEMPERATURE
 
     def _value(self, path: str) -> Any:
         endpoint = self.coordinator.endpoint(path)
         return endpoint.value if endpoint is not None else None
+
+    def _native_target_path(self) -> str | None:
+        """Return the writable Bosch target appropriate for the current mode."""
+        mode_path = {
+            HVACMode.AUTO: self._paths.temporary_room_setpoint,
+            HVACMode.HEAT: self._paths.manual_room_setpoint,
+        }.get(self.hvac_mode)
+        if mode_path is None:
+            return None
+
+        endpoint = self.coordinator.endpoint(mode_path)
+        if endpoint is not None and endpoint.writable:
+            return mode_path
+
+        fallback = self.coordinator.endpoint(self._paths.temperature_room_setpoint)
+        if fallback is not None and fallback.writable:
+            return self._paths.temperature_room_setpoint
+        return None
+
+    @property
+    @override
+    def supported_features(self) -> ClimateEntityFeature:
+        """Advertise target control only while a verified transport can write it."""
+        if self._native_target_path() is not None or self._runtime_data.h60 is not None:
+            return ClimateEntityFeature.TARGET_TEMPERATURE
+        return ClimateEntityFeature(0)
 
     @property
     @override
@@ -164,6 +193,13 @@ class BoschHeatingCircuitClimate(BoschEntity, ClimateEntity):
             _ACTUAL_MODULATION,
         ):
             self.async_on_remove(self.coordinator.register_path(path))
+        for path in (
+            self._paths.manual_room_setpoint,
+            self._paths.temporary_room_setpoint,
+            self._paths.temperature_room_setpoint,
+        ):
+            if path in self.coordinator.discovered_endpoints:
+                self.async_on_remove(self.coordinator.register_path(path))
         if self._runtime_data.h60 is not None:
             self.async_on_remove(
                 self._runtime_data.h60.add_listener(self._handle_h60_update)
@@ -190,14 +226,19 @@ class BoschHeatingCircuitClimate(BoschEntity, ClimateEntity):
 
     @override
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        """Write the active room target through its H60 register."""
+        """Write the active room target, preferring the native Bosch endpoint."""
+        temperature = kwargs.get(ATTR_TEMPERATURE)
+        if isinstance(temperature, bool) or not isinstance(temperature, int | float):
+            raise HomeAssistantError("A numeric target temperature is required")
+
+        if (native_path := self._native_target_path()) is not None:
+            await self.coordinator.async_write(native_path, float(temperature))
+            return
+
         if self._runtime_data.h60 is None:
             raise HomeAssistantError(
                 "This heating circuit does not expose a verified writable room target"
             )
-        temperature = kwargs.get(ATTR_TEMPERATURE)
-        if not isinstance(temperature, int | float):
-            raise HomeAssistantError("A numeric target temperature is required")
         if self._paths.circuit_id == "hc2":
             register = "0220"
         elif self.hvac_mode is HVACMode.AUTO:
