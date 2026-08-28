@@ -18,6 +18,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .entity import BoschEntity
 from .runtime import BoschConfigEntry, BoschRuntimeData
+from .topology import effective_topology
 
 PARALLEL_UPDATES = 1
 
@@ -56,7 +57,6 @@ def _circuit_paths(circuit_id: str) -> HeatingCircuitPaths:
     )
 
 
-_CIRCUITS: Final = (_circuit_paths("hc1"), _circuit_paths("hc2"))
 _ACTUAL_MODULATION: Final = "/heatSources/actualModulation"
 _HVAC_MODE_VALUES: Final = {
     HVACMode.AUTO: "auto",
@@ -76,13 +76,12 @@ class BoschHeatingCircuitClimate(BoschEntity, ClimateEntity):
         """Initialize a heating-circuit climate entity."""
         super().__init__(
             runtime_data,
-            paths.room_temperature,
-            name=f"Heating Circuit {paths.circuit_id.removeprefix('hc')}",
+            paths.current_room_setpoint,
+            name=f"Heating circuit {paths.circuit_id.removeprefix('hc')}",
             enabled_default=True,
         )
         self._paths = paths
         self._attr_unique_id = f"{runtime_data.gateway_uuid}_{paths.circuit_id}"
-        self._attr_suggested_object_id = f"bosch_compress_{paths.circuit_id}"
         self._attr_min_temp = 13.0
         self._attr_max_temp = 29.0
 
@@ -142,8 +141,6 @@ class BoschHeatingCircuitClimate(BoschEntity, ClimateEntity):
         """Return availability when the circuit's core endpoints are present."""
         return (
             super().available
-            and self.coordinator.endpoint(self._paths.room_temperature) is not None
-            and self.coordinator.endpoint(self._paths.current_room_setpoint) is not None
             and self.coordinator.endpoint(self._paths.operation_mode) is not None
         )
 
@@ -224,7 +221,7 @@ class BoschHeatingCircuitClimate(BoschEntity, ClimateEntity):
         """Register all endpoints used by the compound climate entity."""
         await super().async_added_to_hass()
         for path in (
-            self._paths.current_room_setpoint,
+            self._paths.room_temperature,
             self._paths.actual_supply_temperature,
             self._paths.supply_temperature_setpoint,
             self._paths.operation_mode,
@@ -267,9 +264,10 @@ async def async_setup_entry(
     config_entry: BoschConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up both stable heating-circuit entities for automatic recovery."""
+    """Set up every discovered or previously observed heating circuit."""
     del hass
     runtime_data = config_entry.runtime_data
     async_add_entities(
-        BoschHeatingCircuitClimate(runtime_data, paths) for paths in _CIRCUITS
+        BoschHeatingCircuitClimate(runtime_data, _circuit_paths(circuit_id))
+        for circuit_id in sorted(effective_topology(runtime_data).heating_circuits)
     )

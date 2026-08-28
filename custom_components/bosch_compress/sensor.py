@@ -22,7 +22,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import ENERGY_RECORDING_PATHS
-from .entity import DEFAULT_ENABLED_ENDPOINTS, BoschEntity, is_binary_endpoint
+from .entity import BoschEntity, is_binary_endpoint, is_default_enabled_endpoint
 from .runtime import BoschConfigEntry, BoschRuntimeData
 
 PARALLEL_UPDATES = 0
@@ -43,7 +43,7 @@ def _bounded_complex_value(value: list[Any] | tuple[Any, ...] | dict[str, Any]) 
     """Return complex endpoint data only while it remains safe for HA state."""
     try:
         encoded = json.dumps(value, default=str, separators=(",", ":"))
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return {"omitted": True, "reason": "not JSON serializable"}
     if len(encoded.encode()) <= _MAX_COMPLEX_ATTRIBUTE_BYTES:
         return value
@@ -109,11 +109,11 @@ class BoschEndpointSensor(BoschEntity, SensorEntity):
                 else None
             ),
             enabled_default=(
-                path in DEFAULT_ENABLED_ENDPOINTS or path in ENERGY_RECORDING_PATHS
+                is_default_enabled_endpoint(path) or path in ENERGY_RECORDING_PATHS
             ),
             diagnostic=(
                 (
-                    path not in DEFAULT_ENABLED_ENDPOINTS
+                    not is_default_enabled_endpoint(path)
                     and path not in ENERGY_RECORDING_PATHS
                 )
                 or path in _DIAGNOSTIC_ENDPOINTS

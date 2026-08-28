@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from ipaddress import IPv6Address
 from typing import Any, override
+from urllib.parse import urlsplit
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.const import CONF_HOST, CONF_PASSWORD
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -31,13 +38,41 @@ _LOGGER = logging.getLogger(__name__)
 
 def _normalize_host(host: str) -> str:
     """Normalize a bare IP-module address without accepting URL paths."""
-    normalized = host.strip().rstrip("/")
+    normalized = host.strip()
     for scheme in ("http://", "https://"):
         if normalized.casefold().startswith(scheme):
             normalized = normalized[len(scheme) :]
             break
-    if not normalized or "/" in normalized or "#" in normalized or "?" in normalized:
+    normalized = normalized.rstrip("/")
+    if (
+        not normalized
+        or any(character.isspace() for character in normalized)
+        or any(character in normalized for character in "/#?@\\")
+    ):
         raise ValueError("Host must be an address without a path")
+
+    if normalized.count(":") > 1 and not normalized.startswith("["):
+        try:
+            address = IPv6Address(normalized)
+        except ValueError as error:
+            raise ValueError("Host must be a valid address") from error
+        return f"[{address.compressed}]"
+    if normalized.endswith(":"):
+        raise ValueError("Host must include a port after ':'")
+
+    try:
+        parsed = urlsplit(f"//{normalized}")
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("Host must be a valid address") from error
+    if parsed.hostname is None or parsed.path or parsed.username or parsed.password:
+        raise ValueError("Host must be a valid address")
+    if normalized.startswith("["):
+        try:
+            address = IPv6Address(parsed.hostname)
+        except ValueError as error:
+            raise ValueError("Host must be a valid IPv6 address") from error
+        return f"[{address.compressed}]" + (f":{port}" if port is not None else "")
     return normalized
 
 
@@ -56,7 +91,7 @@ def _user_schema(defaults: Mapping[str, Any] | None = None) -> vol.Schema:
     )
 
 
-async def _async_validate_input(hass: Any, data: Mapping[str, Any]) -> str:
+async def _async_validate_input(hass: HomeAssistant, data: Mapping[str, Any]) -> str:
     """Validate Bosch credentials and return the stable gateway UUID."""
     client = BoschClient(
         async_get_clientsession(hass),
@@ -75,7 +110,7 @@ class BoschCompressConfigFlow(ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     @override
-    def async_get_options_flow(config_entry: Any) -> OptionsFlow:
+    def async_get_options_flow(config_entry: ConfigEntry[Any]) -> OptionsFlow:
         """Return the options flow handler."""
         del config_entry
         return BoschCompressOptionsFlow()

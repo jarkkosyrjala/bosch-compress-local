@@ -2,19 +2,20 @@
   "config": {
     "abort": {
       "already_configured": "This Bosch gateway is already configured",
-      "reauth_successful": "Authentication updated successfully"
+      "reauth_successful": "Authentication updated successfully",
+      "unique_id_mismatch": "The credentials belong to a different Bosch gateway"
     },
     "error": {
       "cannot_connect": "Failed to connect to the Bosch gateway",
       "invalid_input": "Enter a valid Bosch IP-module address",
-      "invalid_auth": "Invalid login name or password",
+      "invalid_auth": "Invalid access token or password",
       "unknown": "Unexpected error",
       "wrong_gateway": "The address belongs to a different Bosch gateway"
     },
     "step": {
       "reauth_confirm": {
         "data": {
-          "access_token": "Login name",
+          "access_token": "Access token",
           "password": "Password"
         },
         "description": "Enter the updated credentials for the Bosch IP module.",
@@ -22,7 +23,7 @@
       },
       "user": {
         "data": {
-          "access_token": "Login name",
+          "access_token": "Access token",
           "host": "Bosch IP module address",
           "password": "Password"
         },
@@ -32,6 +33,13 @@
     }
   },
   "options": {
+    "error": {
+      "cannot_connect": "Failed to connect to the Bosch gateway",
+      "invalid_input": "Enter a valid Bosch IP-module address",
+      "invalid_auth": "Invalid access token or password",
+      "unknown": "Unexpected error",
+      "wrong_gateway": "The address belongs to a different Bosch gateway"
+    },
     "step": {
       "init": {
         "data": {

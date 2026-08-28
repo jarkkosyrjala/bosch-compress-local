@@ -15,13 +15,10 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .entity import BoschEntity, string_values
 from .runtime import BoschConfigEntry, BoschRuntimeData
+from .topology import effective_topology
 
 PARALLEL_UPDATES = 1
 
-_ACTUAL_TEMPERATURE = "/dhwCircuits/dhw1/actualTemp"
-_CURRENT_SETPOINT = "/dhwCircuits/dhw1/currentSetpoint"
-_STATUS = "/dhwCircuits/dhw1/status"
-_OPERATION_MODE = "/dhwCircuits/dhw1/operationMode"
 _DHW_PROGRAM_LABELS = {
     "off": "Off",
     "low": "Eco / Normal",
@@ -29,6 +26,18 @@ _DHW_PROGRAM_LABELS = {
     "ownprogram": "Manual time program",
     "eco": "Eco+",
 }
+
+
+def _dhw_path(circuit_id: str, endpoint_name: str) -> str:
+    """Return one endpoint path for a domestic-hot-water circuit."""
+    return f"/dhwCircuits/{circuit_id}/{endpoint_name}"
+
+
+def _dhw_name(circuit_id: str) -> str:
+    """Return a stable, readable entity name for a DHW circuit."""
+    if circuit_id == "dhw1":
+        return "Domestic hot water"
+    return f"Domestic hot water {circuit_id.removeprefix('dhw')}"
 
 
 class BoschDhwWaterHeater(BoschEntity, WaterHeaterEntity):
@@ -39,20 +48,26 @@ class BoschDhwWaterHeater(BoschEntity, WaterHeaterEntity):
     _attr_max_temp = 70.0
     _attr_target_temperature_step = 0.5
 
-    def __init__(self, runtime_data: BoschRuntimeData) -> None:
+    def __init__(
+        self, runtime_data: BoschRuntimeData, circuit_id: str = "dhw1"
+    ) -> None:
         """Initialize the DHW entity."""
+        self._circuit_id = circuit_id
+        self._actual_temperature_path = _dhw_path(circuit_id, "actualTemp")
+        self._current_setpoint_path = _dhw_path(circuit_id, "currentSetpoint")
+        self._status_path = _dhw_path(circuit_id, "status")
+        self._operation_mode_path = _dhw_path(circuit_id, "operationMode")
         super().__init__(
             runtime_data,
-            _ACTUAL_TEMPERATURE,
-            name="Domestic Hot Water",
+            self._actual_temperature_path,
+            name=_dhw_name(circuit_id),
             enabled_default=True,
         )
-        self._attr_unique_id = f"{runtime_data.gateway_uuid}_dhw1"
-        self._attr_suggested_object_id = "bosch_compress_dhw"
+        self._attr_unique_id = f"{runtime_data.gateway_uuid}_{circuit_id}"
 
     def _operation_to_value(self) -> dict[str, str]:
         """Return the current writable native DHW program mapping."""
-        endpoint = self.coordinator.endpoint(_OPERATION_MODE)
+        endpoint = self.coordinator.endpoint(self._operation_mode_path)
         if (
             endpoint is None
             or not endpoint.writable
@@ -71,25 +86,21 @@ class BoschDhwWaterHeater(BoschEntity, WaterHeaterEntity):
     @property
     @override
     def available(self) -> bool:
-        """Return availability when both essential Bosch readings exist."""
-        return (
-            super().available
-            and self.coordinator.endpoint(_CURRENT_SETPOINT) is not None
-            and self.coordinator.endpoint(_STATUS) is not None
-        )
+        """Return availability when the circuit's primary temperature exists."""
+        return super().available
 
     @property
     @override
     def current_temperature(self) -> float | None:
         """Return the measured domestic hot-water temperature."""
-        value = self._value(_ACTUAL_TEMPERATURE)
+        value = self._value(self._actual_temperature_path)
         return float(value) if isinstance(value, int | float) else None
 
     @property
     @override
     def target_temperature(self) -> float | None:
         """Return the controller's active, read-only DHW setpoint."""
-        value = self._value(_CURRENT_SETPOINT)
+        value = self._value(self._current_setpoint_path)
         return float(value) if isinstance(value, int | float) else None
 
     @property
@@ -110,31 +121,23 @@ class BoschDhwWaterHeater(BoschEntity, WaterHeaterEntity):
     @property
     @override
     def current_operation(self) -> str | None:
-        """Return the native program, or read-only Bosch activity."""
+        """Return the native program when operation-mode control is usable."""
         operation_to_value = self._operation_to_value()
-        if operation_to_value:
-            value = self._value(_OPERATION_MODE)
-            if isinstance(value, str):
-                value_to_operation = {
-                    native.casefold(): operation
-                    for operation, native in operation_to_value.items()
-                }
-                operation = value_to_operation.get(value.casefold())
-                if operation is not None:
-                    return operation
-        status = self._value(_STATUS)
-        if isinstance(status, str) and status.casefold() == "active":
-            return "heating"
-        if isinstance(status, str) and status.casefold() == "inactive":
-            return "idle"
-        return None
+        value = self._value(self._operation_mode_path)
+        if not operation_to_value or not isinstance(value, str):
+            return None
+        value_to_operation = {
+            native.casefold(): operation
+            for operation, native in operation_to_value.items()
+        }
+        return value_to_operation.get(value.casefold())
 
     @property
     @override
     def extra_state_attributes(self) -> dict[str, Any]:
         """Expose physical activity separately from the selected program."""
         return {
-            "bosch_status": self._value(_STATUS),
+            "bosch_status": self._value(self._status_path),
             "target_is_read_only": True,
         }
 
@@ -143,10 +146,10 @@ class BoschDhwWaterHeater(BoschEntity, WaterHeaterEntity):
         """Register all compound Bosch inputs."""
         await super().async_added_to_hass()
         for path in (
-            _ACTUAL_TEMPERATURE,
-            _CURRENT_SETPOINT,
-            _STATUS,
-            _OPERATION_MODE,
+            self._actual_temperature_path,
+            self._current_setpoint_path,
+            self._status_path,
+            self._operation_mode_path,
         ):
             self.async_on_remove(self.coordinator.register_path(path))
 
@@ -157,7 +160,7 @@ class BoschDhwWaterHeater(BoschEntity, WaterHeaterEntity):
         if operation_mode not in operation_to_value:
             raise HomeAssistantError(f"Unsupported DHW program: {operation_mode}")
         await self.coordinator.async_write(
-            _OPERATION_MODE, operation_to_value[operation_mode]
+            self._operation_mode_path, operation_to_value[operation_mode]
         )
 
 
@@ -166,7 +169,10 @@ async def async_setup_entry(
     config_entry: BoschConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up the discovered domestic hot-water circuit."""
+    """Set up every discovered or previously observed DHW circuit."""
     del hass
     runtime_data = config_entry.runtime_data
-    async_add_entities([BoschDhwWaterHeater(runtime_data)])
+    async_add_entities(
+        BoschDhwWaterHeater(runtime_data, circuit_id)
+        for circuit_id in sorted(effective_topology(runtime_data).dhw_circuits)
+    )

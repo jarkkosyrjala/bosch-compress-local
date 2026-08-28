@@ -96,11 +96,6 @@ class BoschEncryption:
         ).digest()
         self._key = token_hash + password_hash
 
-    @property
-    def key_hex(self) -> str:
-        """Return the derived key as hexadecimal for migration compatibility."""
-        return self._key.hex()
-
     def encrypt_json(self, value: Any) -> bytes:
         """Serialize and encrypt a JSON value for a Bosch PUT request."""
         plaintext = json.dumps(value, separators=(",", ":")).encode()
@@ -150,11 +145,6 @@ class BoschClient:
         self._encryption = BoschEncryption(access_token, password)
         self._timeout = timeout
         self._request_lock = asyncio.Lock()
-
-    @property
-    def key_hex(self) -> str:
-        """Return the derived key for migrating legacy config entries."""
-        return self._encryption.key_hex
 
     async def async_get(self, path: str) -> Any:
         """Read and decrypt one endpoint."""

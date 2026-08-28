@@ -25,7 +25,6 @@ async def async_get_config_entry_diagnostics(
     return {
         "entry": {
             "version": config_entry.version,
-            "state": config_entry.state,
         },
         "discovery": {
             "endpoint_count": len(endpoints),

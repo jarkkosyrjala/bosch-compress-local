@@ -23,6 +23,7 @@ from custom_components.bosch_compress.climate import (
 )
 from custom_components.bosch_compress.models import BoschEndpoint
 from custom_components.bosch_compress.runtime import BoschRuntimeData
+from custom_components.bosch_compress.topology import BoschTopology
 
 
 class _FakeCoordinator:
@@ -139,12 +140,13 @@ def _runtime(
 
 
 def test_boot_missing_circuits_recover_in_place_without_duplicates() -> None:
-    """Create stable HC entities before their transiently missing trees recover."""
+    """Previously observed HC entities survive a transiently incomplete discovery."""
     coordinator = _FakeCoordinator({})
     runtime = BoschRuntimeData(
         coordinator=cast(Any, coordinator),
         gateway_uuid="test-gateway",
         host="192.0.2.1",
+        topology=BoschTopology(heating_circuits=frozenset({"hc1", "hc2"})),
     )
     config_entry = SimpleNamespace(runtime_data=runtime)
     entities: list[BoschHeatingCircuitClimate] = []
@@ -187,6 +189,32 @@ def test_boot_missing_circuits_recover_in_place_without_duplicates() -> None:
 
     assert all(entity.available for entity in entities)
     assert len(entities) == 2
+
+
+@pytest.mark.parametrize("circuit_count", range(4))
+def test_setup_enumerates_every_discovered_heating_circuit(
+    circuit_count: int,
+) -> None:
+    """Zero through three discovered circuits create exactly matching climates."""
+    values = {
+        f"/heatingCircuits/hc{number}/currentRoomSetpoint": 21.0
+        for number in range(1, circuit_count + 1)
+    }
+    runtime = BoschRuntimeData(
+        coordinator=cast(Any, _FakeCoordinator(values)),
+        gateway_uuid="test-gateway",
+        host="192.0.2.1",
+    )
+    config_entry = SimpleNamespace(runtime_data=runtime)
+    entities: list[BoschHeatingCircuitClimate] = []
+
+    asyncio.run(
+        async_setup_entry(cast(Any, None), cast(Any, config_entry), entities.extend)
+    )
+
+    assert [entity.unique_id for entity in entities] == [
+        f"test-gateway_hc{number}" for number in range(1, circuit_count + 1)
+    ]
 
 
 @pytest.mark.parametrize("circuit_id", ["hc1", "hc2"])

@@ -4,22 +4,22 @@ from __future__ import annotations
 
 from typing import Any, override
 
-from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import DOMAIN
 from .entity import BoschEntity, is_binary_endpoint
 from .runtime import BoschConfigEntry, BoschRuntimeData
+from .topology import effective_topology
 
 PARALLEL_UPDATES = 1
 
-_DHW_CHARGE_PATH = "/dhwCircuits/dhw1/charge"
-_H60_DHW_CHARGE_REGISTER = "1231"
+
+def _dhw_charge_path(circuit_id: str) -> str:
+    """Return the native single-charge path for one DHW circuit."""
+    return f"/dhwCircuits/{circuit_id}/charge"
 
 
 def _native_charge_available(endpoint: object | None) -> bool:
@@ -34,29 +34,14 @@ def _native_charge_available(endpoint: object | None) -> bool:
     return {"start", "stop"}.issubset(values)
 
 
-def _native_charge_unique_id(runtime_data: BoschRuntimeData) -> str:
+def _native_charge_unique_id(
+    runtime_data: BoschRuntimeData, circuit_id: str = "dhw1"
+) -> str:
     """Return the transport-neutral registry identity for native DHW charge."""
-    return f"{runtime_data.gateway_uuid}_extra_warm_water"
-
-
-def _migrate_native_charge_registry_entry(
-    hass: HomeAssistant, runtime_data: BoschRuntimeData
-) -> None:
-    """Move the temporary H60 registry entry to the native identity safely."""
-    registry = er.async_get(hass)
-    legacy_unique_id = f"{runtime_data.gateway_uuid}_h60_{_H60_DHW_CHARGE_REGISTER}"
-    native_unique_id = _native_charge_unique_id(runtime_data)
-    legacy_entity_id = registry.async_get_entity_id(
-        SWITCH_DOMAIN, DOMAIN, legacy_unique_id
+    suffix = (
+        "extra_warm_water" if circuit_id == "dhw1" else f"{circuit_id}_extra_warm_water"
     )
-    if legacy_entity_id is None:
-        return
-    native_entity_id = registry.async_get_entity_id(
-        SWITCH_DOMAIN, DOMAIN, native_unique_id
-    )
-    if native_entity_id is not None:
-        registry.async_remove(native_entity_id)
-    registry.async_update_entity(legacy_entity_id, new_unique_id=native_unique_id)
+    return f"{runtime_data.gateway_uuid}_{suffix}"
 
 
 def _binary_write_value(endpoint: Any, turn_on: bool) -> bool | str:
@@ -113,18 +98,19 @@ class BoschEndpointSwitch(BoschEntity, SwitchEntity):
 class BoschExtraWarmWaterSwitch(BoschEntity, SwitchEntity):
     """Start or stop the Bosch controller's native DHW single charge."""
 
-    def __init__(self, runtime_data: BoschRuntimeData) -> None:
+    def __init__(
+        self, runtime_data: BoschRuntimeData, circuit_id: str = "dhw1"
+    ) -> None:
         """Initialize the native extra-warm-water switch."""
+        path = _dhw_charge_path(circuit_id)
+        suffix = "" if circuit_id == "dhw1" else f" {circuit_id.removeprefix('dhw')}"
         super().__init__(
             runtime_data,
-            _DHW_CHARGE_PATH,
-            name="Extra warm water",
+            path,
+            name=f"Extra warm water{suffix}",
             enabled_default=True,
         )
-        self._attr_unique_id = _native_charge_unique_id(runtime_data)
-        self.internal_integration_suggested_object_id = (
-            "bosch_compress_extra_warm_water"
-        )
+        self._attr_unique_id = _native_charge_unique_id(runtime_data, circuit_id)
 
     @property
     @override
@@ -164,19 +150,19 @@ class BoschExtraWarmWaterSwitch(BoschEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Start a native DHW single charge."""
         del kwargs
-        await self.coordinator.async_write(_DHW_CHARGE_PATH, self._write_value("start"))
+        await self.coordinator.async_write(self._path, self._write_value("start"))
 
     @override
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Stop a native DHW single charge."""
         del kwargs
-        await self.coordinator.async_write(_DHW_CHARGE_PATH, self._write_value("stop"))
+        await self.coordinator.async_write(self._path, self._write_value("stop"))
 
     @override
     async def async_added_to_hass(self) -> None:
         """Retry the fixed charge path until it becomes available."""
         await super().async_added_to_hass()
-        self.async_on_remove(self.coordinator.register_path(_DHW_CHARGE_PATH))
+        self.async_on_remove(self.coordinator.register_path(self._path))
 
 
 async def async_setup_entry(
@@ -185,13 +171,20 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up writable Bosch boolean endpoints."""
+    del hass
     runtime_data = config_entry.runtime_data
-    _migrate_native_charge_registry_entry(hass, runtime_data)
-    entities: list[SwitchEntity] = [BoschExtraWarmWaterSwitch(runtime_data)]
+    topology = effective_topology(runtime_data)
+    charge_paths = {
+        _dhw_charge_path(circuit_id) for circuit_id in topology.dhw_charge_circuits
+    }
+    entities: list[SwitchEntity] = [
+        BoschExtraWarmWaterSwitch(runtime_data, circuit_id)
+        for circuit_id in sorted(topology.dhw_charge_circuits)
+    ]
     entities.extend(
         BoschEndpointSwitch(runtime_data, path)
         for path, endpoint in runtime_data.coordinator.discovered_endpoints.items()
-        if path != _DHW_CHARGE_PATH
+        if path not in charge_paths
         and endpoint.writable
         and is_binary_endpoint(endpoint)
     )

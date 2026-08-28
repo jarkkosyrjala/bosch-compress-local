@@ -50,11 +50,10 @@ class BoschCompressorRunningBinarySensor(BoschEntity, BinarySensorEntity):
         super().__init__(
             runtime_data,
             "/heatSources/actualModulation",
-            name="Compressor Running",
+            name="Compressor running",
             enabled_default=True,
         )
         self._attr_unique_id = f"{runtime_data.gateway_uuid}_compressor_running"
-        self._attr_suggested_object_id = "bosch_compress_compressor_running"
 
     @property
     @override

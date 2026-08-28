@@ -2,60 +2,25 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import BoschAuthenticationError, BoschClient, BoschConnectionError
 from .const import (
     CONF_ACCESS_TOKEN,
-    CONFIG_ENTRY_VERSION,
     DEFAULT_SCAN_INTERVAL,
-    DOMAIN,
     PLATFORMS,
 )
 from .coordinator import BoschDataUpdateCoordinator
 from .runtime import BoschConfigEntry, BoschRuntimeData
-
-_LEGACY_H60_TOPIC_PREFIX = "h60_topic_prefix"
-
-
-def _remove_legacy_h60_registry_entries(
-    hass: HomeAssistant, config_entry: BoschConfigEntry
-) -> None:
-    """Remove obsolete H60 entities owned by this Bosch config entry."""
-    registry = er.async_get(hass)
-    unique_id_prefix = f"{config_entry.runtime_data.gateway_uuid}_h60_"
-    for entry in er.async_entries_for_config_entry(registry, config_entry.entry_id):
-        if entry.platform == DOMAIN and entry.unique_id.startswith(unique_id_prefix):
-            registry.async_remove(entry.entity_id)
-
-
-async def async_migrate_entry(
-    hass: HomeAssistant, config_entry: ConfigEntry[Any]
-) -> bool:
-    """Migrate legacy configuration to the current local-only schema."""
-    if config_entry.version > CONFIG_ENTRY_VERSION:
-        return False
-    if config_entry.version == CONFIG_ENTRY_VERSION:
-        return True
-
-    data = dict(config_entry.data)
-    options = dict(config_entry.options)
-    data.pop(_LEGACY_H60_TOPIC_PREFIX, None)
-    options.pop(_LEGACY_H60_TOPIC_PREFIX, None)
-    hass.config_entries.async_update_entry(
-        config_entry,
-        data=data,
-        options=options,
-        version=CONFIG_ENTRY_VERSION,
-    )
-    return True
+from .topology import (
+    CONF_KNOWN_CAPABILITIES,
+    BoschTopology,
+    discover_topology,
+    merge_capability_storage,
+)
 
 
 async def async_setup_entry(
@@ -87,14 +52,35 @@ async def async_setup_entry(
     except BoschAuthenticationError as error:
         raise ConfigEntryAuthFailed from error
 
+    stored_capabilities = config_entry.data.get(CONF_KNOWN_CAPABILITIES)
+    topology = BoschTopology.from_mapping(stored_capabilities).merged(
+        discover_topology(getattr(coordinator, "discovered_endpoints", {}))
+    )
+    merged_capabilities = merge_capability_storage(stored_capabilities, topology)
+    merged_capabilities["energy_recordings"] = sorted(
+        getattr(coordinator, "supported_energy_recordings", ())
+    )
+    if (
+        stored_capabilities is not None
+        or topology != BoschTopology()
+        or merged_capabilities["energy_recordings"]
+    ) and stored_capabilities != merged_capabilities:
+        hass.config_entries.async_update_entry(
+            config_entry,
+            data={
+                **config_entry.data,
+                CONF_KNOWN_CAPABILITIES: merged_capabilities,
+            },
+        )
+
     config_entry.runtime_data = BoschRuntimeData(
         coordinator=coordinator,
         gateway_uuid=gateway_uuid,
         host=host,
+        topology=topology,
     )
     config_entry.async_on_unload(config_entry.add_update_listener(_async_reload_entry))
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
-    _remove_legacy_h60_registry_entries(hass, config_entry)
     return True
 
 
@@ -106,7 +92,7 @@ async def async_unload_entry(
 
 
 async def _async_reload_entry(
-    hass: HomeAssistant, config_entry: ConfigEntry[Any]
+    hass: HomeAssistant, config_entry: BoschConfigEntry
 ) -> None:
     """Reload after editable options change."""
     await hass.config_entries.async_reload(config_entry.entry_id)

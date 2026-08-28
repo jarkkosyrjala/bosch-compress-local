@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 from datetime import timedelta
 from typing import Any, Final
 
@@ -20,6 +20,7 @@ from .api import (
     BoschConnectionError,
 )
 from .models import BoschEndpoint
+from .topology import CONF_KNOWN_CAPABILITIES
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ ENERGY_RECORDING_PATHS: Final = frozenset(
         "/recordings/heatSources/total/energyMonitoring/eheater",
     }
 )
-CORE_POLL_PATHS: Final = frozenset({"/gateway/uuid", *ENERGY_RECORDING_PATHS})
+CORE_POLL_PATHS: Final = frozenset({"/gateway/uuid"})
 DEFAULT_UPDATE_INTERVAL: Final = timedelta(seconds=60)
 
 
@@ -57,20 +58,48 @@ class BoschDataUpdateCoordinator(DataUpdateCoordinator[dict[str, BoschEndpoint]]
         self.client = client
         self.discovered_endpoints: dict[str, BoschEndpoint] = {}
         self.endpoint_errors: dict[str, BoschApiError] = {}
+        self.supported_energy_recordings: frozenset[str] = frozenset()
         self._core_paths = frozenset(core_paths)
         self._registered_paths: dict[str, int] = {}
 
     async def _async_setup(self) -> None:
-        """Discover the gateway endpoint tree once before the first refresh."""
+        """Discover regular endpoints and probe optional energy recordings once."""
         self.discovered_endpoints = await self.client.async_discover_endpoints()
+        known_recordings: set[str] = set()
+        if self.config_entry is not None:
+            capabilities = self.config_entry.data.get(CONF_KNOWN_CAPABILITIES)
+            if isinstance(capabilities, Mapping):
+                stored_recordings = capabilities.get("energy_recordings")
+                if isinstance(stored_recordings, list):
+                    known_recordings.update(
+                        path
+                        for path in stored_recordings
+                        if isinstance(path, str) and path in ENERGY_RECORDING_PATHS
+                    )
+
+        today = dt_util.now().date()
         for path in ENERGY_RECORDING_PATHS:
+            try:
+                value = await self.client.async_get_daily_energy(path, today)
+            except BoschApiError as error:
+                _LOGGER.debug(
+                    "Bosch energy recording %s is not currently available: %s",
+                    path,
+                    error,
+                )
+                if path not in known_recordings:
+                    continue
+                value = None
+            else:
+                known_recordings.add(path)
             self.discovered_endpoints[path] = BoschEndpoint(
                 path=path,
-                value=None,
+                value=value,
                 value_type="floatValue",
                 writable=False,
                 unit="kWh",
             )
+        self.supported_energy_recordings = frozenset(known_recordings)
 
     @callback
     def register_path(self, path: str) -> Callable[[], None]:

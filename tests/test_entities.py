@@ -17,6 +17,7 @@ from custom_components.bosch_compress.climate import (
     _circuit_paths,
 )
 from custom_components.bosch_compress.const import PLATFORMS
+from custom_components.bosch_compress.entity import endpoint_name
 from custom_components.bosch_compress.models import BoschEndpoint
 from custom_components.bosch_compress.runtime import BoschRuntimeData
 from custom_components.bosch_compress.sensor import BoschEndpointSensor
@@ -124,6 +125,8 @@ def test_two_heating_circuits_keep_independent_climate_state() -> None:
         "/system/appliance/actualSupplyTemperature",
         "/heatingCircuits/hc1/supplyTemperatureSetpoint",
         "/heatingCircuits/hc2/supplyTemperatureSetpoint",
+        "/heatingCircuits/hc7/supplyTemperatureSetpoint",
+        "/dhwCircuits/dhw3/actualTemp",
     ],
 )
 def test_dashboard_supply_temperature_sensors_are_enabled_by_default(
@@ -133,6 +136,17 @@ def test_dashboard_supply_temperature_sensors_are_enabled_by_default(
     entity = BoschEndpointSensor(_runtime({path: 30.0}), path)
 
     assert entity.entity_registry_enabled_default is True
+
+
+def test_endpoint_names_use_sentence_case_and_circuit_abbreviations() -> None:
+    """Generic endpoint entities follow current Home Assistant naming style."""
+    assert (
+        endpoint_name("/heatingCircuits/hc7/actualSupplyTemperature")
+        == "Heating circuits HC7 actual supply temperature"
+    )
+    assert endpoint_name("/dhwCircuits/dhw3/currentSetpoint") == (
+        "DHW circuits DHW3 current setpoint"
+    )
 
 
 @pytest.mark.parametrize(

@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .entity import DEFAULT_ENABLED_ENDPOINTS, BoschEntity
+from .entity import BoschEntity, is_default_enabled_endpoint
 from .runtime import BoschConfigEntry, BoschRuntimeData
 
 PARALLEL_UPDATES = 1
@@ -26,11 +26,11 @@ class BoschEndpointNumber(BoschEntity, NumberEntity):
         super().__init__(
             runtime_data,
             path,
-            enabled_default=path in DEFAULT_ENABLED_ENDPOINTS,
-            diagnostic=path not in DEFAULT_ENABLED_ENDPOINTS,
+            enabled_default=is_default_enabled_endpoint(path),
+            diagnostic=not is_default_enabled_endpoint(path),
         )
         endpoint = runtime_data.coordinator.discovered_endpoints[path]
-        if path not in DEFAULT_ENABLED_ENDPOINTS:
+        if not is_default_enabled_endpoint(path):
             self._attr_entity_category = EntityCategory.CONFIG
         self._attr_native_min_value = endpoint.minimum
         self._attr_native_max_value = endpoint.maximum

@@ -10,8 +10,6 @@ import pytest
 from homeassistant.components.water_heater import WaterHeaterEntityFeature
 from homeassistant.exceptions import HomeAssistantError
 
-import custom_components.bosch_compress.select as select_platform
-from custom_components.bosch_compress.const import DOMAIN
 from custom_components.bosch_compress.models import BoschEndpoint
 from custom_components.bosch_compress.runtime import BoschRuntimeData
 from custom_components.bosch_compress.select import (
@@ -26,6 +24,7 @@ from custom_components.bosch_compress.switch import (
 from custom_components.bosch_compress.switch import (
     async_setup_entry as async_setup_switches,
 )
+from custom_components.bosch_compress.topology import BoschTopology
 from custom_components.bosch_compress.water_heater import (
     BoschDhwWaterHeater,
 )
@@ -84,41 +83,6 @@ class _FakeCoordinator:
         )
 
 
-class _FakeEntityRegistry:
-    """Small registry surface for verifying unique-id migrations."""
-
-    def __init__(self, entries: dict[tuple[str, str, str], str]) -> None:
-        self.entries = dict(entries)
-        self.updates: list[tuple[str, str]] = []
-        self.removed: list[str] = []
-        self.operations: list[tuple[str, ...]] = []
-
-    def async_get_entity_id(
-        self, domain: str, platform: str, unique_id: str
-    ) -> str | None:
-        """Resolve one entity by registry identity."""
-        return self.entries.get((domain, platform, unique_id))
-
-    def async_update_entity(self, entity_id: str, *, new_unique_id: str) -> None:
-        """Record and apply one unique-id migration."""
-        old_key = next(
-            key for key, candidate in self.entries.items() if candidate == entity_id
-        )
-        del self.entries[old_key]
-        self.entries[(old_key[0], old_key[1], new_unique_id)] = entity_id
-        self.updates.append((entity_id, new_unique_id))
-        self.operations.append(("update", entity_id, new_unique_id))
-
-    def async_remove(self, entity_id: str) -> None:
-        """Record and remove one obsolete registry entry."""
-        old_key = next(
-            key for key, candidate in self.entries.items() if candidate == entity_id
-        )
-        del self.entries[old_key]
-        self.removed.append(entity_id)
-        self.operations.append(("remove", entity_id))
-
-
 def _endpoint(
     path: str,
     value: Any,
@@ -145,16 +109,6 @@ def _runtime(endpoints: list[BoschEndpoint]) -> BoschRuntimeData:
     )
 
 
-def _patch_registry(
-    monkeypatch: pytest.MonkeyPatch,
-    entries: dict[tuple[str, str, str], str] | None = None,
-) -> _FakeEntityRegistry:
-    """Install one fake registry shared by both entity platforms."""
-    registry = _FakeEntityRegistry(entries or {})
-    monkeypatch.setattr(select_platform.er, "async_get", lambda _hass: registry)
-    return registry
-
-
 def test_extra_warm_water_uses_native_charge_commands() -> None:
     """The dedicated switch sends the gateway's start and stop commands."""
     runtime = _runtime(
@@ -166,10 +120,7 @@ def test_extra_warm_water_uses_native_charge_commands() -> None:
     assert entity.is_on is False
     assert entity.name == "Extra warm water"
     assert entity.unique_id == "test-gateway_extra_warm_water"
-    assert (
-        entity.internal_integration_suggested_object_id
-        == "bosch_compress_extra_warm_water"
-    )
+    assert not hasattr(entity, "internal_integration_suggested_object_id")
     assert entity.entity_registry_enabled_default is True
 
     asyncio.run(entity.async_turn_on())
@@ -191,9 +142,7 @@ def test_dhw_program_maps_friendly_labels_to_native_values() -> None:
     assert entity.current_option == "Comfort"
     assert entity.name == "DHW program"
     assert entity.unique_id == "test-gateway_dhw_program"
-    assert (
-        entity.internal_integration_suggested_object_id == "bosch_compress_dhw_program"
-    )
+    assert not hasattr(entity, "internal_integration_suggested_object_id")
     assert entity.entity_registry_enabled_default is True
 
     for option, native_value in (
@@ -228,134 +177,130 @@ def test_dhw_program_only_offers_values_reported_by_endpoint() -> None:
     assert runtime.coordinator.writes == [(_PROGRAM_PATH, "futureMode")]
 
 
-def test_native_dhw_controls_migrate_legacy_ids_without_duplicates(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("circuit_count", range(3))
+def test_setup_enumerates_zero_to_two_discovered_dhw_circuits(
+    circuit_count: int,
 ) -> None:
-    """Stable native controls inherit the temporary H60 registry entries."""
+    """Each discovered DHW capability creates exactly one matching entity."""
+    endpoints: list[BoschEndpoint] = []
+    for number in range(1, circuit_count + 1):
+        circuit_id = f"dhw{number}"
+        base = f"/dhwCircuits/{circuit_id}"
+        endpoints.extend(
+            (
+                _endpoint(f"{base}/actualTemp", 45.0 + number),
+                _endpoint(f"{base}/currentSetpoint", 52.0),
+                _endpoint(f"{base}/status", "INACTIVE"),
+                _endpoint(
+                    f"{base}/charge",
+                    "stop",
+                    ("stop", "start"),
+                    writable=True,
+                ),
+                _endpoint(
+                    f"{base}/operationMode",
+                    "eco",
+                    _ALL_PROGRAMS,
+                    writable=True,
+                ),
+            )
+        )
+    runtime = _runtime(endpoints)
+    config_entry = cast(Any, SimpleNamespace(runtime_data=runtime))
+    switches: list[BoschExtraWarmWaterSwitch] = []
+    selects: list[BoschDhwProgramSelect] = []
+    water_heaters: list[BoschDhwWaterHeater] = []
+
+    asyncio.run(async_setup_switches(cast(Any, None), config_entry, switches.extend))
+    asyncio.run(async_setup_selects(cast(Any, None), config_entry, selects.extend))
+    asyncio.run(
+        async_setup_water_heaters(cast(Any, None), config_entry, water_heaters.extend)
+    )
+
+    assert [entity.unique_id for entity in water_heaters] == [
+        f"test-gateway_dhw{number}" for number in range(1, circuit_count + 1)
+    ]
+    assert [entity.unique_id for entity in switches] == [
+        (
+            "test-gateway_extra_warm_water"
+            if number == 1
+            else f"test-gateway_dhw{number}_extra_warm_water"
+        )
+        for number in range(1, circuit_count + 1)
+    ]
+    assert [entity.unique_id for entity in selects] == [
+        (
+            "test-gateway_dhw_program"
+            if number == 1
+            else f"test-gateway_dhw{number}_program"
+        )
+        for number in range(1, circuit_count + 1)
+    ]
+
+    if circuit_count:
+        asyncio.run(switches[-1].async_turn_on())
+        asyncio.run(selects[-1].async_select_option("Comfort"))
+        assert runtime.coordinator.writes[-2:] == [
+            (f"/dhwCircuits/dhw{circuit_count}/charge", "start"),
+            (f"/dhwCircuits/dhw{circuit_count}/operationMode", "high"),
+        ]
+
+
+def test_dhw_control_capabilities_do_not_fabricate_water_heater() -> None:
+    """Charge-only hardware exposes its switch without an unavailable water heater."""
     runtime = _runtime(
         [
-            _endpoint(_CHARGE_PATH, "stop", ("stop", "start"), writable=True),
-            _endpoint(_PROGRAM_PATH, "eco", _ALL_PROGRAMS, writable=True),
+            _endpoint(
+                "/dhwCircuits/tank/charge",
+                "stop",
+                ("stop", "start"),
+                writable=True,
+            )
         ]
     )
     config_entry = cast(Any, SimpleNamespace(runtime_data=runtime))
-    registry = _patch_registry(
-        monkeypatch,
-        {
-            (
-                "switch",
-                DOMAIN,
-                "test-gateway_h60_1231",
-            ): "switch.bosch_compress_extra_warm_water",
-            (
-                "select",
-                DOMAIN,
-                "test-gateway_h60_2213",
-            ): "select.bosch_compress_dhw_program",
-        },
-    )
     switches: list[Any] = []
     selects: list[Any] = []
+    water_heaters: list[Any] = []
 
-    hass = cast(Any, object())
-    asyncio.run(async_setup_switches(hass, config_entry, switches.extend))
-    asyncio.run(async_setup_selects(hass, config_entry, selects.extend))
+    asyncio.run(async_setup_switches(cast(Any, None), config_entry, switches.extend))
+    asyncio.run(async_setup_selects(cast(Any, None), config_entry, selects.extend))
+    asyncio.run(
+        async_setup_water_heaters(cast(Any, None), config_entry, water_heaters.extend)
+    )
 
-    assert [type(entity) for entity in switches] == [BoschExtraWarmWaterSwitch]
-    assert [type(entity) for entity in selects] == [BoschDhwProgramSelect]
-    assert registry.updates == [
-        (
-            "switch.bosch_compress_extra_warm_water",
-            "test-gateway_extra_warm_water",
-        ),
-        ("select.bosch_compress_dhw_program", "test-gateway_dhw_program"),
+    assert [entity.unique_id for entity in switches] == [
+        "test-gateway_tank_extra_warm_water"
     ]
-    assert registry.removed == []
+    assert selects == []
+    assert water_heaters == []
 
 
-def test_native_registry_migration_preserves_established_legacy_entries(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Duplicate native rows yield to established legacy IDs and history."""
-    runtime = _runtime([])
+def test_temperature_only_dhw_circuit_is_available_read_only() -> None:
+    """A minimal DHW circuit remains useful without optional status or setpoint."""
+    runtime = _runtime([_endpoint("/dhwCircuits/tank/actualTemp", 47.5)])
     config_entry = cast(Any, SimpleNamespace(runtime_data=runtime))
-    registry = _patch_registry(
-        monkeypatch,
-        {
-            (
-                "switch",
-                DOMAIN,
-                "test-gateway_h60_1231",
-            ): "switch.bosch_compress_extra_warm_water",
-            (
-                "switch",
-                DOMAIN,
-                "test-gateway_extra_warm_water",
-            ): "switch.bosch_compress_extra_warm_water_2",
-            (
-                "select",
-                DOMAIN,
-                "test-gateway_h60_2213",
-            ): "select.bosch_compress_dhw_program",
-            (
-                "select",
-                DOMAIN,
-                "test-gateway_dhw_program",
-            ): "select.bosch_compress_dhw_program_2",
-        },
+    water_heaters: list[BoschDhwWaterHeater] = []
+
+    asyncio.run(
+        async_setup_water_heaters(cast(Any, None), config_entry, water_heaters.extend)
     )
 
-    hass = cast(Any, object())
-    asyncio.run(async_setup_switches(hass, config_entry, cast(Any, lambda _: None)))
-    asyncio.run(async_setup_selects(hass, config_entry, cast(Any, lambda _: None)))
-
-    assert registry.updates == [
-        (
-            "switch.bosch_compress_extra_warm_water",
-            "test-gateway_extra_warm_water",
-        ),
-        ("select.bosch_compress_dhw_program", "test-gateway_dhw_program"),
-    ]
-    assert registry.removed == [
-        "switch.bosch_compress_extra_warm_water_2",
-        "select.bosch_compress_dhw_program_2",
-    ]
-    assert registry.operations == [
-        ("remove", "switch.bosch_compress_extra_warm_water_2"),
-        (
-            "update",
-            "switch.bosch_compress_extra_warm_water",
-            "test-gateway_extra_warm_water",
-        ),
-        ("remove", "select.bosch_compress_dhw_program_2"),
-        (
-            "update",
-            "select.bosch_compress_dhw_program",
-            "test-gateway_dhw_program",
-        ),
-    ]
-    assert (
-        registry.async_get_entity_id("switch", DOMAIN, "test-gateway_extra_warm_water")
-        == "switch.bosch_compress_extra_warm_water"
-    )
-    assert (
-        registry.async_get_entity_id("select", DOMAIN, "test-gateway_dhw_program")
-        == "select.bosch_compress_dhw_program"
-    )
-    assert (
-        registry.async_get_entity_id("switch", DOMAIN, "test-gateway_h60_1231") is None
-    )
-    assert (
-        registry.async_get_entity_id("select", DOMAIN, "test-gateway_h60_2213") is None
-    )
+    assert len(water_heaters) == 1
+    assert water_heaters[0].available is True
+    assert water_heaters[0].current_temperature == 47.5
+    assert water_heaters[0].target_temperature is None
+    assert water_heaters[0].current_operation is None
 
 
-def test_boot_missing_dhw_endpoints_recover_in_place(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_boot_missing_dhw_endpoints_recover_in_place() -> None:
     """Stable DHW entities retry missing paths and recover without duplicates."""
-    _patch_registry(monkeypatch)
     runtime = _runtime([])
+    runtime.topology = BoschTopology(
+        dhw_circuits=frozenset({"dhw1"}),
+        dhw_charge_circuits=frozenset({"dhw1"}),
+        dhw_program_circuits=frozenset({"dhw1"}),
+    )
     coordinator = cast(_FakeCoordinator, runtime.coordinator)
     config_entry = cast(Any, SimpleNamespace(runtime_data=runtime))
     switches: list[BoschExtraWarmWaterSwitch] = []
@@ -420,11 +365,8 @@ def test_boot_missing_dhw_endpoints_recover_in_place(
     assert coordinator.writes[-1] == (_PROGRAM_PATH, "high")
 
 
-def test_read_only_native_dhw_is_activity_only(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_read_only_native_dhw_reports_activity_as_an_attribute_only() -> None:
     """Read-only control paths do not claim setters or create generic entities."""
-    _patch_registry(monkeypatch)
     runtime = _runtime(
         [
             _endpoint(_CHARGE_PATH, "stop", ("stop", "start")),
@@ -451,7 +393,7 @@ def test_read_only_native_dhw_is_activity_only(
     assert selects[0].available is False
     assert water_heaters[0].supported_features == WaterHeaterEntityFeature(0)
     assert water_heaters[0].operation_list is None
-    assert water_heaters[0].current_operation == "heating"
+    assert water_heaters[0].current_operation is None
     assert water_heaters[0].extra_state_attributes == {
         "bosch_status": "ACTIVE",
         "target_is_read_only": True,
@@ -465,11 +407,8 @@ def test_read_only_native_dhw_is_activity_only(
         asyncio.run(water_heaters[0].async_set_operation_mode("Eco+"))
 
 
-def test_charge_requires_advertised_start_and_stop_values(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_charge_requires_advertised_start_and_stop_values() -> None:
     """The stable switch stays unavailable for an incompatible charge endpoint."""
-    _patch_registry(monkeypatch)
     runtime = _runtime(
         [
             _endpoint(

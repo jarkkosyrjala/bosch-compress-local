@@ -450,7 +450,7 @@ wheels = [
 
 [[package]]
 name = "bosch-compress-local"
-version = "0.1.0"
+version = "0.3.0"
 source = { virtual = "." }
 dependencies = [
     { name = "homeassistant" },

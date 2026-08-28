@@ -14,30 +14,28 @@ from .const import DEFAULT_NAME, DOMAIN
 from .coordinator import BoschDataUpdateCoordinator
 from .runtime import BoschRuntimeData
 
-_NON_ALPHANUMERIC = re.compile(r"[^a-z0-9]+")
-
-DEFAULT_ENABLED_ENDPOINTS: Final = frozenset(
+_DEFAULT_ENABLED_ENDPOINTS: Final = frozenset(
     {
-        "/dhwCircuits/dhw1/actualTemp",
-        "/dhwCircuits/dhw1/currentSetpoint",
-        "/dhwCircuits/dhw1/singleChargeSetpoint",
         "/heatSources/actualModulation",
         "/heatSources/applianceSupplyTemperature",
         "/heatSources/returnTemperature",
-        "/heatingCircuits/hc1/actualSupplyTemperature",
-        "/heatingCircuits/hc1/currentRoomSetpoint",
-        "/heatingCircuits/hc1/roomtemperature",
-        "/heatingCircuits/hc1/supplyTemperatureSetpoint",
-        "/heatingCircuits/hc2/actualSupplyTemperature",
-        "/heatingCircuits/hc2/currentRoomSetpoint",
-        "/heatingCircuits/hc2/roomtemperature",
-        "/heatingCircuits/hc2/supplyTemperatureSetpoint",
         "/notifications",
         "/system/appliance/actualSupplyTemperature",
         "/system/healthStatus",
         "/system/sensors/temperatures/outdoor_t1",
     }
 )
+_DEFAULT_ENABLED_CIRCUIT_ENDPOINTS: Final = {
+    "dhwCircuits": frozenset({"actualTemp", "currentSetpoint", "singleChargeSetpoint"}),
+    "heatingCircuits": frozenset(
+        {
+            "actualSupplyTemperature",
+            "currentRoomSetpoint",
+            "roomtemperature",
+            "supplyTemperatureSetpoint",
+        }
+    ),
+}
 
 _BINARY_VALUE_SETS: Final = (
     frozenset({"off", "on"}),
@@ -45,17 +43,28 @@ _BINARY_VALUE_SETS: Final = (
 )
 
 
-def endpoint_object_id(path: str) -> str:
-    """Build a deterministic object-id fragment from an endpoint path."""
-    return _NON_ALPHANUMERIC.sub("_", path.casefold()).strip("_")
-
-
 def endpoint_name(path: str) -> str:
-    """Build a readable endpoint name while retaining parent context."""
+    """Build a sentence-case endpoint name while retaining parent context."""
     parts = [part for part in path.split("/") if part]
     selected = parts[-3:] if len(parts) > 2 else parts
     words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", " ".join(selected))
-    return words.replace("_", " ").replace("*", "all").title()
+    label = words.replace("_", " ").replace("*", "all").casefold()
+    label = re.sub(r"\bhc(\d+)\b", r"HC\1", label)
+    label = re.sub(r"\bdhw(\d+)\b", r"DHW\1", label)
+    label = re.sub(r"\bdhw\b", "DHW", label)
+    return label[:1].upper() + label[1:]
+
+
+def is_default_enabled_endpoint(path: str) -> bool:
+    """Return whether an endpoint is useful enough to enable by default."""
+    if path in _DEFAULT_ENABLED_ENDPOINTS:
+        return True
+    parts = path.strip("/").split("/")
+    return (
+        len(parts) == 3
+        and parts[1] != ""
+        and parts[2] in _DEFAULT_ENABLED_CIRCUIT_ENDPOINTS.get(parts[0], ())
+    )
 
 
 def string_values(values: Collection[Any]) -> tuple[str, ...]:
@@ -105,7 +114,6 @@ class BoschEntity(CoordinatorEntity[BoschDataUpdateCoordinator]):
         self._path = path
         self._attr_name = name or endpoint_name(path)
         self._attr_unique_id = f"{runtime_data.gateway_uuid}_{path}"
-        self._attr_suggested_object_id = f"bosch_compress_{endpoint_object_id(path)}"
         self._attr_entity_registry_enabled_default = enabled_default
         if diagnostic:
             self._attr_entity_category = EntityCategory.DIAGNOSTIC

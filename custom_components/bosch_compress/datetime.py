@@ -24,7 +24,7 @@ class BoschGatewayDateTime(BoschEntity, DateTimeEntity):
 
     def __init__(self, runtime_data: BoschRuntimeData, timezone: tzinfo) -> None:
         """Initialize the gateway clock entity."""
-        super().__init__(runtime_data, _GATEWAY_DATETIME, name="Gateway Date Time")
+        super().__init__(runtime_data, _GATEWAY_DATETIME, name="Gateway date and time")
         self._attr_entity_category = EntityCategory.CONFIG
         self._timezone = timezone
 

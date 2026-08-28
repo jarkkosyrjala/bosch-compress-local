@@ -1,105 +1,175 @@
 # Bosch Compress Local
 
+[![Validate](https://github.com/jarkkosyrjala/bosch-compress-local/actions/workflows/validate.yml/badge.svg)](https://github.com/jarkkosyrjala/bosch-compress-local/actions/workflows/validate.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A Home Assistant custom integration for direct, local communication with Bosch
-Compress heat pumps through the Bosch IP module. It is designed around current
-Home Assistant entity semantics and preserves multiple heating circuits as
-independent climate entities.
+Compress heat pumps through their Bosch IP module. It follows current Home
+Assistant entity semantics, discovers the connected installation's capabilities,
+and does not require the Bosch cloud or supplemental MQTT hardware.
 
-Initial compatibility is Home Assistant Core 2026.8.3. Older releases are not a
-compatibility target unless a concrete need is identified.
+> [!IMPORTANT]
+> This independent project is not affiliated with, endorsed by, or supported by
+> Bosch, IVT, or their affiliates. Product names and trademarks belong to their
+> respective owners. This software can control heating equipment; use it at your
+> own risk and verify safety-critical behavior at the appliance.
 
-## What it provides
+The initial compatibility baseline is Home Assistant Core 2026.8.3. Significantly
+older releases are not supported.
 
-- Encrypted, local Bosch IP-module communication with no cloud dependency.
-- Recursive capability discovery instead of a fixed model-specific endpoint list.
-- Separate climate entities for heating circuits 1 and 2.
-- A domestic-hot-water entity with measured and active target temperatures.
+## Hardware compatibility
+
+Development and live testing use this installation:
+
+- Bosch Compress 7000i AW heat pump;
+- AWM 5-9 indoor unit with an RC300-family controller;
+- `iCom_Low_NSC_v1` IP module running firmware `04.08.02`.
+
+Other Bosch and IVT systems using the same encrypted local IP-module protocol may
+work, but have not yet been verified. Compatibility reports are welcome in the
+[issue tracker](https://github.com/jarkkosyrjala/bosch-compress-local/issues). Include
+the equipment and IP-module models and firmware versions, but never include
+credentials or unredacted diagnostic data.
+
+The integration supports installations with zero or more heating circuits and zero
+or more domestic-hot-water (DHW) circuits. Circuit IDs are discovered when the
+config entry is set up or reloaded, instead of assuming HC1/HC2 or DHW1. Previously
+discovered circuit IDs are remembered so their entities can recover after a
+temporary incomplete gateway response. Reload the integration after adding or
+reconfiguring physical circuits.
+
+## Features
+
+- AES-256-encrypted local Bosch IP-module communication.
+- Bounded, recursive capability discovery instead of a fixed model-specific
+  endpoint list.
+- Independent climate entities for every discovered heating circuit.
+- A water-heater entity for every discovered DHW circuit.
 - Native sensor, binary sensor, number, select, switch, text, and date-time entities.
+- Mode-aware room-temperature targets, Extra Warm Water, and DHW program controls
+  when the gateway confirms that their endpoints are writable.
+- Current-day compressor and auxiliary-heater energy totals from Bosch recordings.
 - Config-entry diagnostics that exclude credentials, addresses, and live values.
 
-The integration polls only core endpoints and endpoints used by enabled entities.
-All discovered scalar endpoints are available in Home Assistant, while nonessential
-or unverified Bosch entities are disabled by default.
-
-## Default entities
-
-The default Bosch set includes both heating circuits, domestic hot water, outdoor
-and circuit temperatures, heat-source supply/return temperatures, compressor
-modulation and derived running state, DHW setpoints, and clearly identified gateway
-health/notification-history diagnostics. It also includes current-day compressor
-and auxiliary-heater energy totals from the IP module's hourly recordings. These
-energy sensors use kWh and Home Assistant's `total_increasing` state class, so they
-can be selected directly in the Energy dashboard.
+The integration always checks the gateway's stable identity and otherwise polls
+only resources used by enabled entities. Discovered nonessential or unverified
+scalar resources remain available in Home Assistant but are disabled by default.
 
 Bosch notification records are historical diagnostics. They are not treated as a
 live alarm, and the integration does not infer a current alarm from notification
 history alone.
 
-## Missing local controls after installation
+## Installation
 
-The Bosch IP module can temporarily expose an incomplete capability tree. On the
-initial test system—an `iCom_Low_NSC_v1` running firmware `04.08.02`—Extra Warm
-Water, the DHW program, and both heating-circuit target setters returned HTTP 404
-until the complete heat-pump appliance was power-cycled. After the controller setup
-was restored, the IP module advertised seven newly writable local HTTP resources:
-Extra Warm Water activation and duration, the DHW program, and the manual and active
-room-target endpoints for both HC1 and HC2.
+### HACS
 
-A complete power loss can also reset room-controller assignments on this system. In
-the observed case, the indoor unit reported `A11/3081` for duplicate or unconfigured
-room-temperature controllers and omitted the complete HC1 endpoint tree until the
-controller assignments were entered again. Clearing that configuration fault made
-HC1 return without changing the IP-module firmware or credentials.
+Until Bosch Compress Local is included in the HACS default catalog, install it as a
+custom repository:
 
-Do not use a full appliance power cycle as a routine first troubleshooting step.
-Follow the Bosch documentation and the installation's normal electrical isolation
-procedure, including the documented powered-off interval. If a restart causes a
-controller-assignment fault, restore the physical controller configuration first.
-The fixed climate and DHW controls recover automatically. If Home Assistant started
-while the IP module's tree was incomplete, reload the integration once the appliance
-has settled to repopulate the full optional sensor and setting catalog before
-concluding that a resource is unsupported.
+1. Open HACS in Home Assistant.
+2. Open the menu and choose **Custom repositories**.
+3. Add `https://github.com/jarkkosyrjala/bosch-compress-local` with category
+   **Integration**.
+4. Install **Bosch Compress Local** and restart Home Assistant.
 
-## Installation with HACS
+[![Open your Home Assistant instance and add this repository to HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=jarkkosyrjala&repository=bosch-compress-local&category=integration)
 
-Until the repository is published in the HACS default catalog, add its GitHub URL as
-a custom repository with category **Integration**, then install **Bosch Compress
-Local**. Restart Home Assistant afterward.
+### Manual installation
 
-The integration can also be installed manually by copying
-`custom_components/bosch_compress` into the matching directory below the Home
-Assistant configuration directory and restarting Home Assistant.
+Copy `custom_components/bosch_compress` into the matching directory below your
+Home Assistant configuration directory, then restart Home Assistant.
 
-## Configuration
+## Configuration and credentials
 
-In Home Assistant, open **Settings → Devices & services → Add integration** and
-select **Bosch Compress Local**. Enter:
+In Home Assistant, open **Settings → Devices & services → Add integration**, select
+**Bosch Compress Local**, and enter:
 
-- the Bosch IP-module hostname or IP address;
-- the IP-module login name;
-- the IP-module password.
+- **Bosch IP module address:** the module's local hostname or IP address.
+- **Access token:** the gateway access key printed on the IP-module label, commonly
+  shown as `Password` or `Passwort` and formatted as four hyphen-separated groups.
+  This is not the label's numeric `Loginname` value.
+- **Password:** the password chosen when the IP module was paired or configured in
+  the Bosch/IVT application.
 
-The connection address can later be validated and changed through the integration's
-options flow.
+The label and application wording varies between gateway generations. If another
+local Bosch client already works, use its access-key and password pair. Do not use
+Home Assistant credentials. The connection address can later be validated and
+changed through the integration's options flow.
 
 ## Control behavior
 
-- Heating-circuit mode uses the Bosch `auto` and `manual` controls and is presented
-  as Home Assistant `auto` and `heat` respectively.
+- Heating-circuit mode uses the Bosch `auto` and `manual` controls and presents
+  them as Home Assistant `auto` and `heat` respectively.
 - A circuit advertises target-temperature control only when the IP module exposes a
   verified writable room-setpoint endpoint for its current operating mode.
-- Extra Warm Water is exposed as a switch when the IP module advertises the writable
-  domestic-hot-water charge resource.
-- The domestic-hot-water program is exposed as a select when the IP module advertises
-  its writable operation-mode resource.
+- Extra Warm Water is available for a DHW circuit only when the IP module advertises
+  its writable charge resource.
+- The DHW program is available only when the IP module advertises a writable
+  operation-mode resource.
 
 Bosch complex schedule and holiday-assignment payloads are discoverable as disabled
 diagnostic entities, but are not offered as writable controls until they can be
 represented by a safe native Home Assistant type.
 
+## Energy dashboard
+
+The compressor and auxiliary-heater energy sensors report the current local day's
+recorded consumption in kWh. They use Home Assistant's `total_increasing` state
+class and reset at the local day boundary, so they can be selected directly as
+individual-consumption sources in **Settings → Dashboards → Energy**.
+
+These are daily recording totals rather than lifetime device counters. The Bosch
+recording for the current day is queried again on each update, which repairs gaps
+within that day. If Home Assistant remains offline across midnight, consumption
+after its final poll of the previous day cannot be recovered automatically.
+
+## Troubleshooting
+
+### Cannot connect or authenticate
+
+- Confirm that Home Assistant can reach the IP module on the local network.
+- Check that the label access key is entered as **Access token** and that **Password**
+  is the user-selected application password.
+- Ensure another client has not changed or invalidated the gateway password.
+
+### Missing circuits, entities, or local controls
+
+The Bosch IP module can temporarily expose an incomplete capability tree. On the
+initial test system, Extra Warm Water, the DHW program, and both heating-circuit
+target setters returned HTTP 404 until the complete heat-pump appliance was
+power-cycled. After the controller setup was restored, the IP module advertised the
+writable local resources.
+
+A complete power loss can also reset room-controller assignments. In the observed
+case, the indoor unit reported `A11/3081` for duplicate or unconfigured
+room-temperature controllers and omitted a heating circuit until the controller
+assignments were entered again. Clearing that configuration fault restored the
+circuit without changing firmware or credentials.
+
+Do not use a full appliance power cycle as a routine first troubleshooting step.
+Follow the Bosch documentation and the installation's normal electrical-isolation
+procedure. If a restart causes a controller-assignment fault, restore the physical
+controller configuration first. Then reload Bosch Compress Local to discover the
+settled capability tree.
+
+### Reporting a problem
+
+Enable debug logging for `custom_components.bosch_compress`, reproduce the problem,
+and download the integration diagnostics from its Home Assistant device page. Check
+all attachments before publishing them. The integration intentionally omits
+credentials, the configured host, and live endpoint values from diagnostics.
+
+## Security and privacy
+
+The IP module uses Bosch's AES-256-encrypted payload format over local HTTP. The
+integration communicates directly with the configured gateway and sends nothing to
+the Bosch cloud or any project-operated service. Credentials are stored in Home
+Assistant's private config-entry storage and are never included in diagnostics.
+Protect Home Assistant backups and restrict access to the local network as usual.
+
 ## Development
 
-Create the development environment and run the checks with:
+Create the development environment and run all local checks with:
 
 ```bash
 uv sync
@@ -107,3 +177,12 @@ uv run ruff check .
 uv run ruff format --check .
 uv run pytest
 ```
+
+CI also runs Home Assistant hassfest and HACS repository validation. The integration
+uses libraries already provided by Home Assistant Core and therefore has no extra
+runtime package requirements.
+
+## License
+
+Bosch Compress Local is released under the [MIT License](LICENSE), including its
+disclaimer of warranties and limitation of liability.

@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date
+from datetime import date, datetime
+from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
+import custom_components.bosch_compress.coordinator as coordinator_module
 from custom_components.bosch_compress.api import (
     BoschConnectionError,
     BoschForbiddenError,
@@ -44,7 +47,7 @@ class FakeClient:
             "/failing": BoschForbiddenError("forbidden"),
         }
         self.writes: list[tuple[str, object]] = []
-        self.energy = {
+        self.energy: dict[str, float | Exception] = {
             path: 2.5 if path.endswith("/compressor") else 0.5
             for path in ENERGY_RECORDING_PATHS
         }
@@ -86,6 +89,7 @@ def test_coordinator_discovers_and_polls_only_registered_paths() -> None:
             config_entry=None,
         )
         await coordinator._async_setup()
+        initial_energy_requests = list(client.energy_requests)
         remove_listener = coordinator.async_add_listener(
             lambda: None, context="/optional"
         )
@@ -101,16 +105,136 @@ def test_coordinator_discovers_and_polls_only_registered_paths() -> None:
             data["/recordings/heatSources/total/energyMonitoring/eheater"].value == 0.5
         )
         assert {path for path, _day in client.energy_requests} == ENERGY_RECORDING_PATHS
+        assert client.energy_requests == initial_energy_requests
         assert "/failing" not in coordinator.endpoint_errors
         remove_listener()
         unregister = coordinator.register_path("/optional")
         assert coordinator._poll_paths() == {
             "/gateway/uuid",
             "/optional",
-            *ENERGY_RECORDING_PATHS,
         }
         unregister()
-        assert coordinator._poll_paths() == {"/gateway/uuid", *ENERGY_RECORDING_PATHS}
+        assert coordinator._poll_paths() == {"/gateway/uuid"}
+
+    asyncio.run(run_test())
+
+
+def test_energy_recordings_poll_only_with_an_enabled_entity_context() -> None:
+    """Supported recordings stop polling when their entity is disabled."""
+
+    async def run_test() -> None:
+        hass = HomeAssistant("/tmp")
+        client = FakeClient()
+        coordinator = BoschDataUpdateCoordinator(
+            hass,
+            client,  # type: ignore[arg-type]
+            config_entry=None,
+        )
+        await coordinator._async_setup()
+        setup_request_count = len(client.energy_requests)
+        path = "/recordings/heatSources/total/energyMonitoring/compressor"
+
+        await coordinator._async_update_data()
+        assert len(client.energy_requests) == setup_request_count
+
+        remove_listener = coordinator.async_add_listener(lambda: None, context=path)
+        await coordinator._async_update_data()
+        assert len(client.energy_requests) == setup_request_count + 1
+        assert client.energy_requests[-1][0] == path
+
+        remove_listener()
+        await coordinator._async_update_data()
+        assert len(client.energy_requests) == setup_request_count + 1
+
+    asyncio.run(run_test())
+
+
+def test_unsupported_energy_recordings_do_not_create_entities() -> None:
+    """A gateway without recordings does not get unavailable energy sensors."""
+
+    async def run_test() -> None:
+        hass = HomeAssistant("/tmp")
+        client = FakeClient()
+        for path in ENERGY_RECORDING_PATHS:
+            client.energy[path] = BoschForbiddenError("unsupported")
+        coordinator = BoschDataUpdateCoordinator(
+            hass,
+            client,  # type: ignore[arg-type]
+            config_entry=None,
+        )
+
+        await coordinator._async_setup()
+
+        assert not ENERGY_RECORDING_PATHS & coordinator.discovered_endpoints.keys()
+        assert coordinator.supported_energy_recordings == frozenset()
+
+    asyncio.run(run_test())
+
+
+def test_known_energy_recording_survives_a_temporary_setup_failure() -> None:
+    """A previously observed recording remains available for later recovery."""
+
+    async def run_test() -> None:
+        hass = HomeAssistant("/tmp")
+        client = FakeClient()
+        path = "/recordings/heatSources/total/energyMonitoring/compressor"
+        client.energy[path] = BoschConnectionError("temporarily offline")
+        config_entry = SimpleNamespace(
+            data={"_known_capabilities": {"energy_recordings": [path]}},
+            async_on_unload=lambda _callback: None,
+        )
+        coordinator = BoschDataUpdateCoordinator(
+            hass,
+            client,  # type: ignore[arg-type]
+            config_entry=cast(Any, config_entry),
+        )
+
+        await coordinator._async_setup()
+
+        assert coordinator.discovered_endpoints[path].value is None
+        assert coordinator.supported_energy_recordings == frozenset(
+            ENERGY_RECORDING_PATHS
+        )
+
+    asyncio.run(run_test())
+
+
+def test_energy_recording_query_rolls_over_with_home_assistant_local_day(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The enabled energy sensor switches dates at HA's local midnight."""
+    before_midnight = datetime(2026, 8, 28, 23, 59)
+    after_midnight = datetime(2026, 8, 29, 0, 0)
+    times = iter((before_midnight, after_midnight))
+    monkeypatch.setattr(coordinator_module.dt_util, "now", lambda: next(times))
+
+    async def run_test() -> None:
+        hass = HomeAssistant("/tmp")
+        client = FakeClient()
+        coordinator = BoschDataUpdateCoordinator(
+            hass,
+            client,  # type: ignore[arg-type]
+            config_entry=None,
+        )
+        await coordinator._async_setup()
+        remove_listeners = [
+            coordinator.async_add_listener(lambda: None, context=path)
+            for path in ENERGY_RECORDING_PATHS
+        ]
+
+        await coordinator._async_update_data()
+
+        assert {
+            path for path, _day in client.energy_requests[-2:]
+        } == ENERGY_RECORDING_PATHS
+        assert {day for _path, day in client.energy_requests[-2:]} == {
+            date(2026, 8, 29)
+        }
+        assert {day for _path, day in client.energy_requests[:-2]} == {
+            date(2026, 8, 28)
+        }
+        for remove_listener in remove_listeners:
+            remove_listener()
 
     asyncio.run(run_test())
 

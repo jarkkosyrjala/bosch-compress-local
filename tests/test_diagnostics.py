@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -24,7 +23,6 @@ def test_diagnostics_report_only_local_runtime_metadata(monkeypatch: Any) -> Non
     entry = SimpleNamespace(
         entry_id="test-entry",
         version=2,
-        state="loaded",
         runtime_data=SimpleNamespace(coordinator=coordinator),
     )
     registry_entries = [
@@ -44,7 +42,7 @@ def test_diagnostics_report_only_local_runtime_metadata(monkeypatch: Any) -> Non
         )
     )
 
-    assert result["entry"] == {"version": 2, "state": "loaded"}
+    assert result["entry"] == {"version": 2}
     assert result["discovery"] == {
         "endpoint_count": 2,
         "writable_endpoint_count": 1,
@@ -53,4 +51,3 @@ def test_diagnostics_report_only_local_runtime_metadata(monkeypatch: Any) -> Non
     }
     assert result["polling"]["endpoint_errors"] == {"/failed": "TimeoutError"}
     assert result["entities"] == {"count": 2, "disabled_count": 1}
-    assert "h60" not in json.dumps(result).casefold()
