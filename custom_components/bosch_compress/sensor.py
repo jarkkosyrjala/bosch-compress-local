@@ -43,7 +43,9 @@ def _bounded_complex_value(value: list[Any] | tuple[Any, ...] | dict[str, Any]) 
     """Return complex endpoint data only while it remains safe for HA state."""
     try:
         encoded = json.dumps(value, default=str, separators=(",", ":"))
-    except (TypeError, ValueError):
+    except TypeError:
+        return {"omitted": True, "reason": "not JSON serializable"}
+    except ValueError:
         return {"omitted": True, "reason": "not JSON serializable"}
     if len(encoded.encode()) <= _MAX_COMPLEX_ATTRIBUTE_BYTES:
         return value
