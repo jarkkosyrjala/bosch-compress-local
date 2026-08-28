@@ -3,7 +3,6 @@
   "name": "Bosch Compress Local",
   "codeowners": ["@jarkkosyrjala"],
   "config_flow": true,
-  "after_dependencies": ["mqtt"],
   "integration_type": "device",
   "iot_class": "local_polling",
   "version": "0.1.0"

@@ -11,8 +11,7 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .entity import BoschEntity, H60Entity, is_binary_endpoint
-from .h60 import H60_REGISTERS, H60RegisterDescription, H60RegisterKind
+from .entity import BoschEntity, is_binary_endpoint
 from .runtime import BoschConfigEntry, BoschRuntimeData
 
 PARALLEL_UPDATES = 0
@@ -67,29 +66,6 @@ class BoschCompressorRunningBinarySensor(BoschEntity, BinarySensorEntity):
         return None
 
 
-class H60SupplementalBinarySensor(H60Entity, BinarySensorEntity):
-    """Represent an H60-only binary state."""
-
-    def __init__(
-        self,
-        runtime_data: BoschRuntimeData,
-        description: H60RegisterDescription,
-    ) -> None:
-        """Initialize an H60 binary sensor."""
-        super().__init__(runtime_data, description)
-        if description.register == "1A20":
-            self._attr_device_class = BinarySensorDeviceClass.PROBLEM
-        elif description.register == "1A0C":
-            self._attr_device_class = BinarySensorDeviceClass.RUNNING
-
-    @property
-    @override
-    def is_on(self) -> bool | None:
-        """Return the latest H60 binary state."""
-        value = self.h60_value
-        return value != 0 if value is not None else None
-
-
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: BoschConfigEntry,
@@ -107,11 +83,4 @@ async def async_setup_entry(
     ]
     if "/heatSources/actualModulation" in runtime_data.coordinator.discovered_endpoints:
         entities.append(BoschCompressorRunningBinarySensor(runtime_data))
-    if runtime_data.h60 is not None:
-        entities.extend(
-            H60SupplementalBinarySensor(runtime_data, description)
-            for description in H60_REGISTERS.values()
-            if description.kind is H60RegisterKind.BINARY_SENSOR
-            and description.register != "1A01"
-        )
     async_add_entities(entities)

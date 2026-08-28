@@ -6,9 +6,9 @@ from typing import Final
 from homeassistant.const import Platform
 
 DOMAIN: Final = "bosch_compress"
+CONFIG_ENTRY_VERSION: Final = 2
 
 CONF_ACCESS_TOKEN: Final = "access_token"
-CONF_H60_TOPIC_PREFIX: Final = "h60_topic_prefix"
 
 DEFAULT_NAME: Final = "Bosch Compress"
 DEFAULT_SCAN_INTERVAL: Final = timedelta(seconds=60)

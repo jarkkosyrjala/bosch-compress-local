@@ -10,8 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .entity import DEFAULT_ENABLED_ENDPOINTS, BoschEntity, H60Entity
-from .h60 import H60_REGISTERS, H60RegisterDescription, H60RegisterKind
+from .entity import DEFAULT_ENABLED_ENDPOINTS, BoschEntity
 from .runtime import BoschConfigEntry, BoschRuntimeData
 
 PARALLEL_UPDATES = 1
@@ -63,39 +62,6 @@ class BoschEndpointNumber(BoschEntity, NumberEntity):
         await self.coordinator.async_write(self._path, value)
 
 
-class H60SupplementalNumber(H60Entity, NumberEntity):
-    """Represent a raw H60 numeric setting for advanced control."""
-
-    _attr_mode = NumberMode.BOX
-
-    def __init__(
-        self,
-        runtime_data: BoschRuntimeData,
-        description: H60RegisterDescription,
-    ) -> None:
-        """Initialize an H60 number."""
-        super().__init__(runtime_data, description)
-        self._attr_native_min_value = description.native_min_value
-        self._attr_native_max_value = description.native_max_value
-        self._attr_native_step = description.native_step
-        self._attr_native_unit_of_measurement = description.unit
-
-    @property
-    @override
-    def native_value(self) -> float | None:
-        """Return the latest numeric H60 value."""
-        value = self.h60_value
-        return float(value) if value is not None else None
-
-    @override
-    async def async_set_native_value(self, value: float) -> None:
-        """Publish a validated H60 numeric value."""
-        if self._runtime_data.h60 is not None:
-            await self._runtime_data.h60.async_set_value(
-                self._description.register, value
-            )
-
-
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: BoschConfigEntry,
@@ -112,10 +78,4 @@ async def async_setup_entry(
         and endpoint.minimum is not None
         and endpoint.maximum is not None
     ]
-    if runtime_data.h60 is not None:
-        entities.extend(
-            H60SupplementalNumber(runtime_data, description)
-            for description in H60_REGISTERS.values()
-            if description.kind is H60RegisterKind.NUMBER
-        )
     async_add_entities(entities)

@@ -15,8 +15,6 @@ compatibility target unless a concrete need is identified.
 - Separate climate entities for heating circuits 1 and 2.
 - A domestic-hot-water entity with measured and active target temperatures.
 - Native sensor, binary sensor, number, select, switch, text, and date-time entities.
-- Optional Husdata H60 MQTT supplementation for values and controls that this IP
-  module does not expose.
 - Config-entry diagnostics that exclude credentials, addresses, and live values.
 
 The integration polls only core endpoints and endpoints used by enabled entities.
@@ -30,17 +28,34 @@ and circuit temperatures, heat-source supply/return temperatures, compressor
 modulation and derived running state, DHW setpoints, and clearly identified gateway
 health/notification-history diagnostics.
 
-When an H60 MQTT topic prefix is configured, currently used values that have no
-confirmed Bosch equivalent are also enabled. This includes Extra Warm Water, the
-DHW program, active alarm and current alarm code, specialist temperatures, pump and
-valve states, and legacy energy/runtime telemetry. Confirmed duplicate H60 readings
-are intentionally replaced by their Bosch source. The unverified HC1 automatic and
-HC2 raw target-number entities remain available but disabled by default; the two
-climate entities route target writes to the appropriate registers.
-
 Bosch notification records are historical diagnostics. They are not treated as a
-live alarm. If H60 is configured, its live alarm register supplies the active-alarm
-binary sensor.
+live alarm, and the integration does not infer a current alarm from notification
+history alone.
+
+## Missing local controls after installation
+
+The Bosch IP module can temporarily expose an incomplete capability tree. On the
+initial test system—an `iCom_Low_NSC_v1` running firmware `04.08.02`—Extra Warm
+Water, the DHW program, and both heating-circuit target setters returned HTTP 404
+until the complete heat-pump appliance was power-cycled. After the controller setup
+was restored, the IP module advertised seven newly writable local HTTP resources:
+Extra Warm Water activation and duration, the DHW program, and the manual and active
+room-target endpoints for both HC1 and HC2.
+
+A complete power loss can also reset room-controller assignments on this system. In
+the observed case, the indoor unit reported `A11/3081` for duplicate or unconfigured
+room-temperature controllers and omitted the complete HC1 endpoint tree until the
+controller assignments were entered again. Clearing that configuration fault made
+HC1 return without changing the IP-module firmware or credentials.
+
+Do not use a full appliance power cycle as a routine first troubleshooting step.
+Follow the Bosch documentation and the installation's normal electrical isolation
+procedure, including the documented powered-off interval. If a restart causes a
+controller-assignment fault, restore the physical controller configuration first.
+The fixed climate and DHW controls recover automatically. If Home Assistant started
+while the IP module's tree was incomplete, reload the integration once the appliance
+has settled to repopulate the full optional sensor and setting catalog before
+concluding that a resource is unsupported.
 
 ## Installation with HACS
 
@@ -59,24 +74,21 @@ select **Bosch Compress Local**. Enter:
 
 - the Bosch IP-module hostname or IP address;
 - the IP-module login name;
-- the IP-module password; and
-- optionally, the H60 MQTT topic prefix.
+- the IP-module password.
 
-The optional H60 support requires Home Assistant's MQTT integration to be configured
-and connected. Connection settings can later be validated and changed through the
-integration's options flow.
+The connection address can later be validated and changed through the integration's
+options flow.
 
 ## Control behavior
 
 - Heating-circuit mode uses the Bosch `auto` and `manual` controls and is presented
   as Home Assistant `auto` and `heat` respectively.
-- HC1 target writes use H60 register `0203` in manual mode and `020C` in automatic
-  mode.
-- HC2 target writes use H60 register `0220`; live write validation is intentionally
-  deferred until it can be performed with an explicit rollback value.
-- Extra Warm Water is a switch using the verified H60 values `0` and `1`.
-- DHW program is a select: `0` Off, `1` Eco / Normal, `2` Comfort, `4` Manual time
-  program, and `5` Eco+. Value `3` is rejected as undefined.
+- A circuit advertises target-temperature control only when the IP module exposes a
+  verified writable room-setpoint endpoint for its current operating mode.
+- Extra Warm Water is exposed as a switch when the IP module advertises the writable
+  domestic-hot-water charge resource.
+- The domestic-hot-water program is exposed as a select when the IP module advertises
+  its writable operation-mode resource.
 
 Bosch complex schedule and holiday-assignment payloads are discoverable as disabled
 diagnostic entities, but are not offered as writable controls until they can be

@@ -86,8 +86,8 @@ def test_coordinator_discovers_and_polls_only_registered_paths() -> None:
     asyncio.run(run_test())
 
 
-def test_coordinator_preserves_data_on_partial_endpoint_failure() -> None:
-    """A forbidden endpoint remains stale without taking successful data down."""
+def test_coordinator_removes_failed_path_without_taking_successful_data_down() -> None:
+    """A partial failure removes stale data so entity availability can update."""
 
     async def run_test() -> None:
         hass = HomeAssistant("/tmp")
@@ -104,9 +104,49 @@ def test_coordinator_preserves_data_on_partial_endpoint_failure() -> None:
         data = await coordinator._async_update_data()
 
         assert data["/optional"].value == 3
-        assert data["/failing"].value == 2
+        assert "/failing" not in data
         assert isinstance(coordinator.endpoint_errors["/failing"], BoschForbiddenError)
         assert coordinator.endpoint("/failing") is None
+
+    asyncio.run(run_test())
+
+
+def test_coordinator_notifies_on_partial_failure_and_same_value_recovery() -> None:
+    """Removing and readding a path changes data even when its value is unchanged."""
+
+    async def run_test() -> None:
+        hass = HomeAssistant("/tmp")
+        client = FakeClient()
+        client.responses["/optional"] = client.discovery["/optional"]
+        coordinator = BoschDataUpdateCoordinator(
+            hass,
+            client,  # type: ignore[arg-type]
+            config_entry=None,
+        )
+        await coordinator._async_setup()
+        coordinator.data = dict(coordinator.discovered_endpoints)
+        coordinator.register_path("/failing")
+        updates = 0
+
+        def handle_update() -> None:
+            nonlocal updates
+            updates += 1
+
+        remove_listener = coordinator.async_add_listener(handle_update)
+
+        await coordinator.async_refresh()
+
+        assert updates == 1
+        assert coordinator.data is not None
+        assert "/failing" not in coordinator.data
+        assert coordinator.endpoint("/failing") is None
+
+        client.responses["/failing"] = client.discovery["/failing"]
+        await coordinator.async_refresh()
+
+        assert updates == 2
+        assert coordinator.endpoint("/failing") == client.discovery["/failing"]
+        remove_listener()
 
     asyncio.run(run_test())
 

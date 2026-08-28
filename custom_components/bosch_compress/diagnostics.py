@@ -26,7 +26,6 @@ async def async_get_config_entry_diagnostics(
         "entry": {
             "version": config_entry.version,
             "state": config_entry.state,
-            "h60_configured": runtime_data.h60 is not None,
         },
         "discovery": {
             "endpoint_count": len(endpoints),
@@ -49,11 +48,6 @@ async def async_get_config_entry_diagnostics(
             "count": len(registry_entries),
             "disabled_count": sum(
                 entry.disabled_by is not None for entry in registry_entries
-            ),
-        },
-        "h60": {
-            "received_registers": (
-                sorted(runtime_data.h60.values) if runtime_data.h60 is not None else []
             ),
         },
     }

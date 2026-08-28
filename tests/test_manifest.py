@@ -17,3 +17,5 @@ def test_manifest_metadata() -> None:
     assert manifest["integration_type"] == "device"
     assert manifest["iot_class"] == "local_polling"
     assert manifest["version"]
+    assert "after_dependencies" not in manifest
+    assert "mqtt" not in manifest.get("dependencies", [])

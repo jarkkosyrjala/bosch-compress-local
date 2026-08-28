@@ -92,7 +92,7 @@ class BoschDataUpdateCoordinator(DataUpdateCoordinator[dict[str, BoschEndpoint]]
         return set(self._core_paths) | self._registered_paths.keys() | context_paths
 
     async def _async_update_data(self) -> dict[str, BoschEndpoint]:
-        """Poll active endpoints while preserving successful partial data."""
+        """Poll active endpoints and remove failed paths until they recover."""
         data = dict(self.data or self.discovered_endpoints)
         errors: dict[str, BoschApiError] = {}
         successful_requests = 0
@@ -103,6 +103,7 @@ class BoschDataUpdateCoordinator(DataUpdateCoordinator[dict[str, BoschEndpoint]]
                 successful_requests += 1
             except BoschApiError as error:
                 errors[path] = error
+                data.pop(path, None)
                 _LOGGER.debug("Unable to update Bosch endpoint %s: %s", path, error)
 
         self.endpoint_errors = errors

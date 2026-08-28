@@ -7,19 +7,31 @@ from typing import Any, override
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import DOMAIN
-from .entity import BoschEntity, H60Entity, is_binary_endpoint
-from .h60 import H60_REGISTERS, H60RegisterDescription, H60RegisterKind
+from .entity import BoschEntity, is_binary_endpoint
 from .runtime import BoschConfigEntry, BoschRuntimeData
 
 PARALLEL_UPDATES = 1
 
 _DHW_CHARGE_PATH = "/dhwCircuits/dhw1/charge"
 _H60_DHW_CHARGE_REGISTER = "1231"
+
+
+def _native_charge_available(endpoint: object | None) -> bool:
+    """Return whether the fixed charge endpoint supports start and stop."""
+    if endpoint is None or not getattr(endpoint, "writable", False):
+        return False
+    values = {
+        value.casefold()
+        for value in getattr(endpoint, "allowed_values", ())
+        if isinstance(value, str)
+    }
+    return {"start", "stop"}.issubset(values)
 
 
 def _native_charge_unique_id(runtime_data: BoschRuntimeData) -> str:
@@ -37,10 +49,13 @@ def _migrate_native_charge_registry_entry(
     legacy_entity_id = registry.async_get_entity_id(
         SWITCH_DOMAIN, DOMAIN, legacy_unique_id
     )
-    if legacy_entity_id is None or registry.async_get_entity_id(
-        SWITCH_DOMAIN, DOMAIN, native_unique_id
-    ):
+    if legacy_entity_id is None:
         return
+    native_entity_id = registry.async_get_entity_id(
+        SWITCH_DOMAIN, DOMAIN, native_unique_id
+    )
+    if native_entity_id is not None:
+        registry.async_remove(native_entity_id)
     registry.async_update_entity(legacy_entity_id, new_unique_id=native_unique_id)
 
 
@@ -113,9 +128,18 @@ class BoschExtraWarmWaterSwitch(BoschEntity, SwitchEntity):
 
     @property
     @override
+    def available(self) -> bool:
+        """Return availability after the writable native endpoint appears."""
+        return super().available and _native_charge_available(self.endpoint)
+
+    @property
+    @override
     def is_on(self) -> bool | None:
         """Return whether a native DHW single charge is active."""
-        value = self.endpoint.value
+        endpoint = self.endpoint
+        if endpoint is None:
+            return None
+        value = endpoint.value
         if not isinstance(value, str):
             return None
         normalized = value.casefold()
@@ -127,7 +151,11 @@ class BoschExtraWarmWaterSwitch(BoschEntity, SwitchEntity):
 
     def _write_value(self, requested: str) -> str:
         """Return the exact casing advertised by this gateway, when available."""
-        for value in self.endpoint.allowed_values:
+        endpoint = self.endpoint
+        if not _native_charge_available(endpoint):
+            raise HomeAssistantError("Native extra warm water control is unavailable")
+        assert endpoint is not None
+        for value in endpoint.allowed_values:
             if isinstance(value, str) and value.casefold() == requested:
                 return value
         return requested
@@ -144,38 +172,11 @@ class BoschExtraWarmWaterSwitch(BoschEntity, SwitchEntity):
         del kwargs
         await self.coordinator.async_write(_DHW_CHARGE_PATH, self._write_value("stop"))
 
-
-class H60SupplementalSwitch(H60Entity, SwitchEntity):
-    """Represent an H60-only writable binary control."""
-
-    def __init__(
-        self,
-        runtime_data: BoschRuntimeData,
-        description: H60RegisterDescription,
-    ) -> None:
-        """Initialize an H60 switch."""
-        super().__init__(runtime_data, description)
-
-    @property
     @override
-    def is_on(self) -> bool | None:
-        """Return the latest H60 switch state."""
-        value = self.h60_value
-        return value != 0 if value is not None else None
-
-    @override
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Publish the verified H60 on payload."""
-        del kwargs
-        if self._runtime_data.h60 is not None:
-            await self._runtime_data.h60.async_set_value(self._description.register, 1)
-
-    @override
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        """Publish the verified H60 off payload."""
-        del kwargs
-        if self._runtime_data.h60 is not None:
-            await self._runtime_data.h60.async_set_value(self._description.register, 0)
+    async def async_added_to_hass(self) -> None:
+        """Retry the fixed charge path until it becomes available."""
+        await super().async_added_to_hass()
+        self.async_on_remove(self.coordinator.register_path(_DHW_CHARGE_PATH))
 
 
 async def async_setup_entry(
@@ -185,27 +186,8 @@ async def async_setup_entry(
 ) -> None:
     """Set up writable Bosch boolean endpoints."""
     runtime_data = config_entry.runtime_data
-    charge_endpoint = runtime_data.coordinator.discovered_endpoints.get(
-        _DHW_CHARGE_PATH
-    )
-    charge_values = (
-        {
-            value.casefold()
-            for value in charge_endpoint.allowed_values
-            if isinstance(value, str)
-        }
-        if charge_endpoint is not None
-        else set()
-    )
-    native_charge_available = (
-        charge_endpoint is not None
-        and charge_endpoint.writable
-        and {"start", "stop"}.issubset(charge_values)
-    )
-    entities: list[SwitchEntity] = []
-    if native_charge_available:
-        _migrate_native_charge_registry_entry(hass, runtime_data)
-        entities.append(BoschExtraWarmWaterSwitch(runtime_data))
+    _migrate_native_charge_registry_entry(hass, runtime_data)
+    entities: list[SwitchEntity] = [BoschExtraWarmWaterSwitch(runtime_data)]
     entities.extend(
         BoschEndpointSwitch(runtime_data, path)
         for path, endpoint in runtime_data.coordinator.discovered_endpoints.items()
@@ -213,14 +195,4 @@ async def async_setup_entry(
         and endpoint.writable
         and is_binary_endpoint(endpoint)
     )
-    if runtime_data.h60 is not None:
-        entities.extend(
-            H60SupplementalSwitch(runtime_data, description)
-            for description in H60_REGISTERS.values()
-            if description.kind is H60RegisterKind.SWITCH
-            and not (
-                native_charge_available
-                and description.register == _H60_DHW_CHARGE_REGISTER
-            )
-        )
     async_add_entities(entities)

@@ -21,13 +21,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .entity import (
-    DEFAULT_ENABLED_ENDPOINTS,
-    BoschEntity,
-    H60Entity,
-    is_binary_endpoint,
-)
-from .h60 import H60_REGISTERS, H60RegisterDescription, H60RegisterKind
+from .entity import DEFAULT_ENABLED_ENDPOINTS, BoschEntity, is_binary_endpoint
 from .runtime import BoschConfigEntry, BoschRuntimeData
 
 PARALLEL_UPDATES = 0
@@ -51,6 +45,31 @@ def _bounded_complex_value(value: list[Any] | tuple[Any, ...] | dict[str, Any]) 
     }
 
 
+def _latest_notification(value: Any) -> dict[str, Any] | None:
+    """Return the newest stored notification record without implying it is active."""
+    if not isinstance(value, list | tuple):
+        return None
+    records = [record for record in value if isinstance(record, dict)]
+    if not records:
+        return None
+    return max(
+        enumerate(records),
+        key=lambda indexed: (str(indexed[1].get("t", "")), indexed[0]),
+    )[1]
+
+
+def _notification_identifier(record: dict[str, Any]) -> str:
+    """Build a compact identity for one stored notification record."""
+    display_code = str(record.get("dcd", "")).strip()
+    controller_code = str(record.get("ccd", "")).strip()
+    if display_code and controller_code:
+        return f"{display_code}-{controller_code}"
+    if display_code or controller_code:
+        return display_code or controller_code
+    timestamp = str(record.get("t", "")).strip()
+    return timestamp or "stored notification"
+
+
 def _is_control_endpoint(endpoint: Any) -> bool:
     """Return whether another platform provides the writable endpoint."""
     if not endpoint.writable:
@@ -72,6 +91,7 @@ class BoschEndpointSensor(BoschEntity, SensorEntity):
         super().__init__(
             runtime_data,
             path,
+            name=("Latest stored notification" if path == "/notifications" else None),
             enabled_default=path in DEFAULT_ENABLED_ENDPOINTS,
             diagnostic=(
                 path not in DEFAULT_ENABLED_ENDPOINTS or path in _DIAGNOSTIC_ENDPOINTS
@@ -120,6 +140,11 @@ class BoschEndpointSensor(BoschEntity, SensorEntity):
     def native_value(self) -> str | int | float | None:
         """Return the current endpoint value."""
         value = self.endpoint.value
+        if self._path == "/notifications":
+            latest = _latest_notification(value)
+            if latest is not None:
+                return _notification_identifier(latest)
+            return "none" if isinstance(value, list | tuple) else None
         if value is None or isinstance(value, str | int | float):
             return value
         if isinstance(value, list | tuple | dict):
@@ -141,47 +166,19 @@ class BoschEndpointSensor(BoschEntity, SensorEntity):
         if endpoint.allowed_values:
             attributes["allowed_values"] = list(endpoint.allowed_values)
         if self._path == "/notifications":
-            attributes["semantics"] = "stored notification history, not active alarm"
+            latest = _latest_notification(endpoint.value)
+            attributes["semantics"] = (
+                "latest stored notification record, not current alarm state"
+            )
+            if isinstance(endpoint.value, list | tuple):
+                attributes["record_count"] = len(endpoint.value)
+            if latest is not None:
+                attributes["latest_code"] = _notification_identifier(latest)
+                if timestamp := latest.get("t"):
+                    attributes["latest_timestamp"] = timestamp
         elif self._path == "/system/healthStatus":
             attributes["semantics"] = "gateway health, not current alarm state"
         return attributes
-
-
-class H60SupplementalSensor(H60Entity, SensorEntity):
-    """Represent diagnostic data not exposed by the Bosch IP module."""
-
-    def __init__(
-        self,
-        runtime_data: BoschRuntimeData,
-        description: H60RegisterDescription,
-    ) -> None:
-        """Initialize an H60 supplemental sensor."""
-        super().__init__(runtime_data, description)
-        self._attr_native_unit_of_measurement = description.unit
-        if description.unit == UnitOfTemperature.CELSIUS:
-            self._attr_device_class = SensorDeviceClass.TEMPERATURE
-            self._attr_state_class = SensorStateClass.MEASUREMENT
-        elif description.unit == UnitOfPower.KILO_WATT:
-            self._attr_device_class = SensorDeviceClass.POWER
-            self._attr_state_class = SensorStateClass.MEASUREMENT
-        elif description.unit == PERCENTAGE:
-            self._attr_state_class = SensorStateClass.MEASUREMENT
-
-    @property
-    @override
-    def native_value(self) -> int | float | None:
-        """Return the latest numeric H60 value."""
-        return self.h60_value
-
-    @property
-    @override
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Identify the supplemental source and register."""
-        return {
-            "source": "Husdata H60 MQTT",
-            "register": self._description.register,
-            "description": self._description.description,
-        }
 
 
 async def async_setup_entry(
@@ -199,11 +196,4 @@ async def async_setup_entry(
         and not is_binary_endpoint(endpoint)
         and not _is_control_endpoint(endpoint)
     ]
-    if runtime_data.h60 is not None:
-        entities.extend(
-            H60SupplementalSensor(runtime_data, description)
-            for description in H60_REGISTERS.values()
-            if description.kind is H60RegisterKind.SENSOR
-            and description.register != "3108"
-        )
     async_add_entities(entities)

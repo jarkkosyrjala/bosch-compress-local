@@ -19,7 +19,12 @@ from .api import (
     BoschConnectionError,
     BoschResponseError,
 )
-from .const import CONF_ACCESS_TOKEN, CONF_H60_TOPIC_PREFIX, DEFAULT_NAME, DOMAIN
+from .const import (
+    CONF_ACCESS_TOKEN,
+    CONFIG_ENTRY_VERSION,
+    DEFAULT_NAME,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,14 +41,6 @@ def _normalize_host(host: str) -> str:
     return normalized
 
 
-def _normalize_h60_topic_prefix(prefix: str) -> str:
-    """Normalize an optional concrete MQTT topic prefix."""
-    normalized = prefix.strip().strip("/")
-    if normalized and ("+" in normalized or "#" in normalized):
-        raise ValueError("H60 topic prefix must not contain MQTT wildcards")
-    return normalized
-
-
 def _user_schema(defaults: Mapping[str, Any] | None = None) -> vol.Schema:
     """Build the user configuration schema."""
     defaults = defaults or {}
@@ -55,10 +52,6 @@ def _user_schema(defaults: Mapping[str, Any] | None = None) -> vol.Schema:
                 default=defaults.get(CONF_ACCESS_TOKEN, ""),
             ): cv.string,
             vol.Required(CONF_PASSWORD): cv.string,
-            vol.Optional(
-                CONF_H60_TOPIC_PREFIX,
-                default=defaults.get(CONF_H60_TOPIC_PREFIX, ""),
-            ): cv.string,
         }
     )
 
@@ -77,7 +70,7 @@ async def _async_validate_input(hass: Any, data: Mapping[str, Any]) -> str:
 class BoschCompressConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a Bosch Compress config flow."""
 
-    VERSION = 1
+    VERSION = CONFIG_ENTRY_VERSION
 
     @staticmethod
     @callback
@@ -97,9 +90,6 @@ class BoschCompressConfigFlow(ConfigFlow, domain=DOMAIN):
             user_input = dict(user_input)
             try:
                 user_input[CONF_HOST] = _normalize_host(user_input[CONF_HOST])
-                user_input[CONF_H60_TOPIC_PREFIX] = _normalize_h60_topic_prefix(
-                    user_input[CONF_H60_TOPIC_PREFIX]
-                )
                 gateway_uuid = await _async_validate_input(self.hass, user_input)
             except ValueError:
                 errors["base"] = "invalid_input"
@@ -180,7 +170,7 @@ class BoschCompressConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class BoschCompressOptionsFlow(OptionsFlow):
-    """Handle editable connection and H60 options."""
+    """Handle editable local connection options."""
 
     @override
     async def async_step_init(
@@ -191,12 +181,7 @@ class BoschCompressOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
-                values = {
-                    CONF_HOST: _normalize_host(user_input[CONF_HOST]),
-                    CONF_H60_TOPIC_PREFIX: _normalize_h60_topic_prefix(
-                        user_input[CONF_H60_TOPIC_PREFIX]
-                    ),
-                }
+                values = {CONF_HOST: _normalize_host(user_input[CONF_HOST])}
                 gateway_uuid = await _async_validate_input(
                     self.hass,
                     {**config_entry.data, CONF_HOST: values[CONF_HOST]},
@@ -218,24 +203,12 @@ class BoschCompressOptionsFlow(OptionsFlow):
                 else:
                     return self.async_create_entry(data=values)
 
-        defaults = {
-            CONF_HOST: config_entry.options.get(
-                CONF_HOST, config_entry.data[CONF_HOST]
-            ),
-            CONF_H60_TOPIC_PREFIX: config_entry.options.get(
-                CONF_H60_TOPIC_PREFIX,
-                config_entry.data.get(CONF_H60_TOPIC_PREFIX, ""),
-            ),
-        }
+        default_host = config_entry.options.get(CONF_HOST, config_entry.data[CONF_HOST])
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_HOST, default=defaults[CONF_HOST]): cv.string,
-                    vol.Optional(
-                        CONF_H60_TOPIC_PREFIX,
-                        default=defaults[CONF_H60_TOPIC_PREFIX],
-                    ): cv.string,
+                    vol.Required(CONF_HOST, default=default_host): cv.string,
                 }
             ),
             errors=errors,

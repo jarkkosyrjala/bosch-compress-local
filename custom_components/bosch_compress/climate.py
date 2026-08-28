@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, ClassVar, Final, override
+from typing import Any, Final, override
 
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
@@ -12,7 +12,7 @@ from homeassistant.components.climate.const import (
     HVACMode,
 )
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -58,12 +58,15 @@ def _circuit_paths(circuit_id: str) -> HeatingCircuitPaths:
 
 _CIRCUITS: Final = (_circuit_paths("hc1"), _circuit_paths("hc2"))
 _ACTUAL_MODULATION: Final = "/heatSources/actualModulation"
+_HVAC_MODE_VALUES: Final = {
+    HVACMode.AUTO: "auto",
+    HVACMode.HEAT: "manual",
+}
 
 
 class BoschHeatingCircuitClimate(BoschEntity, ClimateEntity):
     """Represent one independent Bosch heating circuit."""
 
-    _attr_hvac_modes: ClassVar[list[HVACMode]] = [HVACMode.AUTO, HVACMode.HEAT]
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 0.5
 
@@ -87,6 +90,26 @@ class BoschHeatingCircuitClimate(BoschEntity, ClimateEntity):
         endpoint = self.coordinator.endpoint(path)
         return endpoint.value if endpoint is not None else None
 
+    def _hvac_mode_value_map(self) -> dict[HVACMode, str]:
+        """Return exact writable Bosch values for supported HVAC modes."""
+        endpoint = self.coordinator.endpoint(self._paths.operation_mode)
+        if (
+            endpoint is None
+            or not endpoint.writable
+            or endpoint.value_type != "stringValue"
+        ):
+            return {}
+        allowed_values = {
+            value.casefold(): value
+            for value in endpoint.allowed_values
+            if isinstance(value, str)
+        }
+        return {
+            mode: allowed_values[value]
+            for mode, value in _HVAC_MODE_VALUES.items()
+            if value in allowed_values
+        }
+
     def _native_target_path(self) -> str | None:
         """Return the writable Bosch target appropriate for the current mode."""
         mode_path = {
@@ -108,8 +131,8 @@ class BoschHeatingCircuitClimate(BoschEntity, ClimateEntity):
     @property
     @override
     def supported_features(self) -> ClimateEntityFeature:
-        """Advertise target control only while a verified transport can write it."""
-        if self._native_target_path() is not None or self._runtime_data.h60 is not None:
+        """Advertise target control only for a verified writable Bosch endpoint."""
+        if self._native_target_path() is not None:
             return ClimateEntityFeature.TARGET_TEMPERATURE
         return ClimateEntityFeature(0)
 
@@ -140,27 +163,44 @@ class BoschHeatingCircuitClimate(BoschEntity, ClimateEntity):
 
     @property
     @override
+    def hvac_modes(self) -> list[HVACMode]:
+        """Return only HVAC modes explicitly writable through Bosch metadata."""
+        return list(self._hvac_mode_value_map())
+
+    @property
+    @override
     def hvac_mode(self) -> HVACMode | None:
         """Return the requested Bosch circuit operating mode."""
-        return {
-            "auto": HVACMode.AUTO,
-            "manual": HVACMode.HEAT,
-        }.get(self._value(self._paths.operation_mode))
+        value = self._value(self._paths.operation_mode)
+        if not isinstance(value, str):
+            return None
+        return {native: mode for mode, native in _HVAC_MODE_VALUES.items()}.get(
+            value.casefold()
+        )
 
     @property
     @override
     def hvac_action(self) -> HVACAction | None:
         """Return heating only when this circuit is circulating generated heat."""
-        if self._value(self._paths.status) != "ACTIVE":
+        status = self._value(self._paths.status)
+        if not isinstance(status, str):
+            return None
+        normalized_status = status.casefold()
+        if normalized_status == "inactive":
             return HVACAction.IDLE
+        if normalized_status != "active":
+            return None
+
         pump = self._value(self._paths.pump_modulation)
         source = self._value(_ACTUAL_MODULATION)
         if (
-            isinstance(pump, int | float)
-            and isinstance(source, int | float)
-            and pump > 0
-            and source > 0
+            isinstance(pump, bool)
+            or not isinstance(pump, int | float)
+            or isinstance(source, bool)
+            or not isinstance(source, int | float)
         ):
+            return None
+        if pump > 0 and source > 0:
             return HVACAction.HEATING
         return HVACAction.IDLE
 
@@ -198,54 +238,28 @@ class BoschHeatingCircuitClimate(BoschEntity, ClimateEntity):
             self._paths.temporary_room_setpoint,
             self._paths.temperature_room_setpoint,
         ):
-            if path in self.coordinator.discovered_endpoints:
-                self.async_on_remove(self.coordinator.register_path(path))
-        if self._runtime_data.h60 is not None:
-            self.async_on_remove(
-                self._runtime_data.h60.add_listener(self._handle_h60_update)
-            )
-
-    @callback
-    def _handle_h60_update(self, register: str, value: int | float) -> None:
-        """Refresh HC1 after its supplemental target register changes."""
-        del value
-        circuit_registers = {
-            "hc1": {"0203", "020C"},
-            "hc2": {"0220"},
-        }
-        if register in circuit_registers[self._paths.circuit_id]:
-            self.async_write_ha_state()
+            self.async_on_remove(self.coordinator.register_path(path))
 
     @override
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Write the native Bosch automatic/manual mode."""
-        value = {HVACMode.AUTO: "auto", HVACMode.HEAT: "manual"}.get(hvac_mode)
+        value = self._hvac_mode_value_map().get(hvac_mode)
         if value is None:
             raise HomeAssistantError(f"Unsupported HVAC mode: {hvac_mode}")
         await self.coordinator.async_write(self._paths.operation_mode, value)
 
     @override
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        """Write the active room target, preferring the native Bosch endpoint."""
+        """Write the active room target through a verified Bosch endpoint."""
         temperature = kwargs.get(ATTR_TEMPERATURE)
         if isinstance(temperature, bool) or not isinstance(temperature, int | float):
             raise HomeAssistantError("A numeric target temperature is required")
 
-        if (native_path := self._native_target_path()) is not None:
-            await self.coordinator.async_write(native_path, float(temperature))
-            return
-
-        if self._runtime_data.h60 is None:
+        if (native_path := self._native_target_path()) is None:
             raise HomeAssistantError(
                 "This heating circuit does not expose a verified writable room target"
             )
-        if self._paths.circuit_id == "hc2":
-            register = "0220"
-        elif self.hvac_mode is HVACMode.AUTO:
-            register = "020C"
-        else:
-            register = "0203"
-        await self._runtime_data.h60.async_set_value(register, float(temperature))
+        await self.coordinator.async_write(native_path, float(temperature))
 
 
 async def async_setup_entry(
@@ -253,14 +267,9 @@ async def async_setup_entry(
     config_entry: BoschConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up every discovered heating circuit independently."""
+    """Set up both stable heating-circuit entities for automatic recovery."""
     del hass
     runtime_data = config_entry.runtime_data
-    discovered = runtime_data.coordinator.discovered_endpoints
     async_add_entities(
-        BoschHeatingCircuitClimate(runtime_data, paths)
-        for paths in _CIRCUITS
-        if paths.room_temperature in discovered
-        and paths.current_room_setpoint in discovered
-        and paths.operation_mode in discovered
+        BoschHeatingCircuitClimate(runtime_data, paths) for paths in _CIRCUITS
     )
