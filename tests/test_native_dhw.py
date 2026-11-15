@@ -288,8 +288,8 @@ def test_temperature_only_dhw_circuit_is_available_read_only() -> None:
 
     assert len(water_heaters) == 1
     assert water_heaters[0].available is True
-    assert water_heaters[0].current_temperature == 47.5
-    assert water_heaters[0].target_temperature is None
+    assert water_heaters[0].native_current_temperature == 47.5
+    assert water_heaters[0].native_target_temperature is None
     assert water_heaters[0].current_operation is None
 
 
@@ -353,8 +353,8 @@ def test_boot_missing_dhw_endpoints_recover_in_place() -> None:
     assert selects[0].available is True
     assert selects[0].current_option == "Eco / Normal"
     assert water_heaters[0].available is True
-    assert water_heaters[0].current_temperature == 48.25
-    assert water_heaters[0].target_temperature == 54.0
+    assert water_heaters[0].native_current_temperature == 48.25
+    assert water_heaters[0].native_target_temperature == 54.0
     assert water_heaters[0].operation_list == _CANONICAL_PROGRAMS
     assert water_heaters[0].current_operation == "Eco / Normal"
     assert (

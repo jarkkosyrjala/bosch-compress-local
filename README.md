@@ -14,8 +14,15 @@ and does not require the Bosch cloud or supplemental MQTT hardware.
 > respective owners. This software can control heating equipment; use it at your
 > own risk and verify safety-critical behavior at the appliance.
 
-The initial compatibility baseline is Home Assistant Core 2026.8.3. Significantly
-older releases are not supported.
+Version 0.4.0 requires **Home Assistant Core 2026.11.0 or newer**. Upgrade Core
+before installing this integration version. For Core 2026.8.3–2026.10.x, keep
+[version 0.3.0](https://github.com/jarkkosyrjala/bosch-compress-local/releases/tag/v0.3.0),
+which remains available. Older Core versions are unsupported.
+
+Climate and water-heater entities use Home Assistant's native temperature API.
+Bosch readings and writes stay in Celsius; Home Assistant converts displayed
+values and climate service inputs to the user's configured units. Entity IDs,
+heating controls and the read-only DHW target are preserved.
 
 ## Hardware compatibility
 
@@ -169,13 +176,24 @@ Protect Home Assistant backups and restrict access to the local network as usual
 
 ## Development
 
-Create the development environment and run all local checks with:
+Use Python **3.14** (selected by `.python-version`) to match the Home Assistant
+runtime. Create the development environment and run all local checks with:
 
 ```bash
 uv sync
 uv run ruff check .
 uv run ruff format --check .
 uv run pytest
+```
+
+CI tests Home Assistant Core **2026.11.0** (minimum) and **2026.11.1** (current
+validated release), including Celsius/Fahrenheit state publication and climate
+service conversion. To reproduce the second environment without changing the lockfile:
+
+```bash
+UV_PROJECT_ENVIRONMENT=.local/core-2026.11.1 uv sync --locked
+uv pip install --python .local/core-2026.11.1/bin/python homeassistant==2026.11.1
+.local/core-2026.11.1/bin/python -m pytest
 ```
 
 CI also runs Home Assistant hassfest and HACS repository validation. The integration

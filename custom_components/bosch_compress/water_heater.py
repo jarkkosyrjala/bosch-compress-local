@@ -43,7 +43,7 @@ def _dhw_name(circuit_id: str) -> str:
 class BoschDhwWaterHeater(BoschEntity, WaterHeaterEntity):
     """Represent domestic hot water without fabricating target writes."""
 
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_min_temp = 30.0
     _attr_max_temp = 70.0
     _attr_target_temperature_step = 0.5
@@ -91,14 +91,14 @@ class BoschDhwWaterHeater(BoschEntity, WaterHeaterEntity):
 
     @property
     @override
-    def current_temperature(self) -> float | None:
+    def native_current_temperature(self) -> float | None:
         """Return the measured domestic hot-water temperature."""
         value = self._value(self._actual_temperature_path)
         return float(value) if isinstance(value, int | float) else None
 
     @property
     @override
-    def target_temperature(self) -> float | None:
+    def native_target_temperature(self) -> float | None:
         """Return the controller's active, read-only DHW setpoint."""
         value = self._value(self._current_setpoint_path)
         return float(value) if isinstance(value, int | float) else None

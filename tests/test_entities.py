@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-from importlib.metadata import version
 from typing import Any, cast
 
 import pytest
@@ -91,9 +90,7 @@ def _heating_values() -> dict[str, Any]:
 
 
 def test_every_declared_platform_imports_on_baseline_home_assistant() -> None:
-    """Every forwarded platform imports against the pinned HA 2026.8.3 API."""
-    assert version("homeassistant") == "2026.8.3"
-
+    """Every forwarded platform imports against the supported Home Assistant API."""
     for platform in PLATFORMS:
         module = importlib.import_module(
             f"custom_components.bosch_compress.{platform.value}"
@@ -109,12 +106,12 @@ def test_two_heating_circuits_keep_independent_climate_state() -> None:
 
     assert hc1.unique_id == "test-gateway_hc1"
     assert hc2.unique_id == "test-gateway_hc2"
-    assert hc1.current_temperature == 21.25
-    assert hc1.target_temperature == 22.5
+    assert hc1.native_current_temperature == 21.25
+    assert hc1.native_target_temperature == 22.5
     assert hc1.hvac_mode is HVACMode.HEAT
     assert hc1.hvac_action is HVACAction.HEATING
-    assert hc2.current_temperature == 19.5
-    assert hc2.target_temperature == 20.0
+    assert hc2.native_current_temperature == 19.5
+    assert hc2.native_target_temperature == 20.0
     assert hc2.hvac_mode is HVACMode.AUTO
     assert hc2.hvac_action is HVACAction.IDLE
 
