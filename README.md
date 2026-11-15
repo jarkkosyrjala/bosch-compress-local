@@ -176,7 +176,8 @@ Protect Home Assistant backups and restrict access to the local network as usual
 
 ## Development
 
-Create the development environment and run all local checks with:
+Use Python **3.14** (selected by `.python-version`) to match the Home Assistant
+runtime. Create the development environment and run all local checks with:
 
 ```bash
 uv sync
