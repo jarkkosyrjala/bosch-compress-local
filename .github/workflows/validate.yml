@@ -2,6 +2,7 @@ name: Validate
 
 on:
   push:
+    branches: [main]
   pull_request:
   schedule:
     - cron: "0 0 * * *"
@@ -12,8 +13,11 @@ permissions:
 
 jobs:
   quality:
-    name: Lint and test
+    name: Lint and test (HA ${{ matrix.homeassistant }})
     runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        homeassistant: ["2026.11.0", "2026.11.1"]
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -26,9 +30,13 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      - name: Select current Core for compatibility tests
+        if: matrix.homeassistant != '2026.11.0'
+        run: uv pip install "homeassistant==${{ matrix.homeassistant }}"
+
       - name: Check release version consistency
         run: >-
-          uv run python -c "import json, pathlib, tomllib;
+          uv run --no-sync python -c "import json, pathlib, tomllib;
           root = pathlib.Path('.');
           manifest = json.loads((root / 'custom_components/bosch_compress/manifest.json').read_text());
           project = tomllib.loads((root / 'pyproject.toml').read_text())['project'];
@@ -36,13 +44,13 @@ jobs:
           f\"manifest {manifest['version']} != project {project['version']}\""
 
       - name: Lint
-        run: uv run ruff check .
+        run: uv run --no-sync ruff check .
 
       - name: Check formatting
-        run: uv run ruff format --check .
+        run: uv run --no-sync ruff format --check .
 
       - name: Test
-        run: uv run pytest
+        run: uv run --no-sync pytest
 
   hassfest:
     name: Hassfest

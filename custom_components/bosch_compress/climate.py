@@ -67,7 +67,7 @@ _HVAC_MODE_VALUES: Final = {
 class BoschHeatingCircuitClimate(BoschEntity, ClimateEntity):
     """Represent one independent Bosch heating circuit."""
 
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 0.5
 
     def __init__(
@@ -146,14 +146,14 @@ class BoschHeatingCircuitClimate(BoschEntity, ClimateEntity):
 
     @property
     @override
-    def current_temperature(self) -> float | None:
+    def native_current_temperature(self) -> float | None:
         """Return measured room temperature, never the target register."""
         value = self._value(self._paths.room_temperature)
         return float(value) if isinstance(value, int | float) else None
 
     @property
     @override
-    def target_temperature(self) -> float | None:
+    def native_target_temperature(self) -> float | None:
         """Return the current room target reported by Bosch."""
         value = self._value(self._paths.current_room_setpoint)
         return float(value) if isinstance(value, int | float) else None
@@ -247,7 +247,7 @@ class BoschHeatingCircuitClimate(BoschEntity, ClimateEntity):
 
     @override
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        """Write the active room target through a verified Bosch endpoint."""
+        """Write Celsius supplied by HA after its user-unit service conversion."""
         temperature = kwargs.get(ATTR_TEMPERATURE)
         if isinstance(temperature, bool) or not isinstance(temperature, int | float):
             raise HomeAssistantError("A numeric target temperature is required")

@@ -8,5 +8,5 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/jarkkosyrjala/bosch-compress-local/issues",
   "loggers": ["custom_components.bosch_compress"],
-  "version": "0.3.0"
+  "version": "0.4.0"
 }
