@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 from homeassistant import loader
-from homeassistant.components import climate, water_heater
+from homeassistant.components import climate, number, sensor, water_heater
+from homeassistant.components.sensor import SensorStateClass
 from homeassistant.config_entries import ConfigEntries
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -18,6 +19,9 @@ from homeassistant.helpers import area_registry, device_registry, entity_registr
 from homeassistant.setup import async_setup_component
 from homeassistant.util.unit_system import METRIC_SYSTEM, US_CUSTOMARY_SYSTEM
 
+from custom_components.bosch_compress.models import BoschEndpoint
+from custom_components.bosch_compress.number import BoschEndpointNumber
+from custom_components.bosch_compress.sensor import BoschEndpointSensor
 from tests.test_native_climate import _runtime as heating_runtime
 from tests.test_native_dhw import _endpoint
 from tests.test_native_dhw import _runtime as dhw_runtime
@@ -60,6 +64,8 @@ def test_native_temperatures_through_ha(
         hass.config.units = US_CUSTOMARY_SYSTEM if fahrenheit else METRIC_SYSTEM
         assert await async_setup_component(hass, "climate", {})
         assert await async_setup_component(hass, "water_heater", {})
+        assert await async_setup_component(hass, "sensor", {})
+        assert await async_setup_component(hass, "number", {})
         climates = []
         coordinators = []
         for circuit, mode, setter in (
@@ -85,10 +91,54 @@ def test_native_temperatures_through_ha(
         )
         tank = water_module.BoschDhwWaterHeater(dhw)
         tank.entity_id = "water_heater.bosch_dhw"
+        # An invalid very first reading must still create a numeric sensor with
+        # measurement statistics, and a setting with its advertised write bounds.
+        outdoor_path = "/system/sensors/temperatures/outdoor_t1"
+        setting_path = "/dhwCircuits/dhw1/singleChargeSetpoint"
+        for path, writable in ((outdoor_path, False), (setting_path, True)):
+            coordinators[0].discovered_endpoints[path] = BoschEndpoint(
+                path,
+                -3276.8,
+                "floatValue",
+                writable,
+                unit="C",
+                minimum=5,
+                maximum=80,
+            )
+        outdoor = BoschEndpointSensor(climates[0]._runtime_data, outdoor_path)
+        outdoor.entity_id = "sensor.bosch_outdoor"
+        setting = BoschEndpointNumber(climates[0]._runtime_data, setting_path)
+        setting.entity_id = "number.bosch_setting"
         try:
             await hass.data[climate.DATA_COMPONENT].async_add_entities(climates)
             await hass.data[water_heater.DATA_COMPONENT].async_add_entities([tank])
+            await hass.data[sensor.DATA_COMPONENT].async_add_entities([outdoor])
+            await hass.data[number.DATA_COMPONENT].async_add_entities([setting])
             await hass.async_block_till_done()
+            assert outdoor.state_class is SensorStateClass.MEASUREMENT
+            for entity in (outdoor, setting):
+                assert entity.available
+                assert hass.states.get(entity.entity_id).state == "unknown"
+                assert "raw_value" not in hass.states.get(entity.entity_id).attributes
+            assert (setting.native_min_value, setting.native_max_value) == (5, 80)
+            for path, entity, valid in (
+                (outdoor_path, outdoor, -20.0),
+                (setting_path, setting, 50.0),
+            ):
+                endpoints = coordinators[0].discovered_endpoints
+                endpoints[path] = replace(endpoints[path], value=valid)
+                entity.async_write_ha_state()
+                assert entity.native_value == valid
+                state = hass.states.get(entity.entity_id)
+                assert state.state not in ("unknown", "unavailable")
+                assert float(state.state) == (
+                    valid * 1.8 + 32 if fahrenheit and entity is outdoor else valid
+                )
+                endpoints[path] = replace(endpoints[path], value=float("inf"))
+                entity.async_write_ha_state()
+                assert hass.states.get(entity.entity_id).state == "unknown"
+                endpoints[path] = replace(endpoints[path], value=valid)
+                entity.async_write_ha_state()
             for entity in climates:
                 assert entity.native_temperature_unit == "°C"
                 assert entity.native_current_temperature == 21.0
@@ -155,13 +205,39 @@ def test_native_temperatures_through_ha(
             ):
                 endpoints = coordinator.discovered_endpoints
                 saved = dict(endpoints)
-                endpoints[measured] = replace(endpoints[measured], value=None)
-                endpoints[setpoint] = replace(endpoints[setpoint], value=None)
-                entity.async_write_ha_state()
-                assert entity.available
-                state = hass.states.get(entity.entity_id)
-                assert state.attributes["current_temperature"] is None
-                assert state.attributes["temperature"] is None
+                features = entity.supported_features
+                for invalid in (
+                    None,
+                    -3276.8,
+                    -3200.0,
+                    3200.0,
+                    float("inf"),
+                    True,
+                    "bad",
+                ):
+                    for path in (measured, setpoint):
+                        endpoints[path] = replace(
+                            saved[path],
+                            value=invalid,
+                            unit="C",
+                            value_type="floatValue",
+                        )
+                    entity.async_write_ha_state()
+                    assert entity.available and entity.supported_features == features
+                    state = hass.states.get(entity.entity_id)
+                    assert state.attributes["current_temperature"] is None
+                    assert state.attributes["temperature"] is None
+                    assert "raw_value" not in state.attributes
+                    assert climates[1].native_current_temperature == 21.0
+                    # Every invalid reading recovers without entity recreation.
+                    endpoints.update(saved)
+                    entity.async_write_ha_state()
+                    assert (
+                        hass.states.get(entity.entity_id).attributes[
+                            "current_temperature"
+                        ]
+                        is not None
+                    )
                 endpoints.pop(measured)
                 endpoints.pop(setpoint)
                 assert entity.native_current_temperature is None

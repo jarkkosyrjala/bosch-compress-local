@@ -132,6 +132,17 @@ after its final poll of the previous day cannot be recovered automatically.
 
 ## Troubleshooting
 
+### Unknown temperature readings
+
+A reachable gateway can report a missing measurement using an EMS error marker
+such as −3276.8°C. These values are exposed as unknown rather than recorded as
+temperatures. Invalid numeric readings, including non-finite numbers, are handled
+the same way. Valid climate modes and target controls remain available, and the
+next valid poll restores the measurement automatically. A failed endpoint request
+instead makes the affected entity unavailable.
+
+This does not remove invalid readings already stored in Home Assistant history.
+
 ### Cannot connect or authenticate
 
 - Confirm that Home Assistant can reach the IP module on the local network.
