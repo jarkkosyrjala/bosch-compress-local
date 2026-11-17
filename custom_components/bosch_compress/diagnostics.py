@@ -17,6 +17,7 @@ async def async_get_config_entry_diagnostics(
     runtime_data = config_entry.runtime_data
     coordinator = runtime_data.coordinator
     endpoints = coordinator.discovered_endpoints
+    current_endpoints = coordinator.data if coordinator.data is not None else endpoints
     entity_registry = er.async_get(hass)
     registry_entries = er.async_entries_for_config_entry(
         entity_registry, config_entry.entry_id
@@ -38,6 +39,11 @@ async def async_get_config_entry_diagnostics(
         },
         "polling": {
             "last_update_success": coordinator.last_update_success,
+            "invalid_values": {
+                path: endpoint.value_error
+                for path, endpoint in sorted(current_endpoints.items())
+                if endpoint.value_error is not None
+            },
             "endpoint_errors": {
                 path: type(error).__name__
                 for path, error in sorted(coordinator.endpoint_errors.items())

@@ -119,6 +119,36 @@ def test_coordinator_discovers_and_polls_only_registered_paths() -> None:
     asyncio.run(run_test())
 
 
+def test_invalid_measurement_is_not_a_transport_failure() -> None:
+    """Discovery and polling keep missing measurements and recover in place."""
+
+    async def run_test() -> None:
+        hass = HomeAssistant("/tmp")
+        client = FakeClient()
+        path = "/optional"
+        missing = BoschEndpoint(path, -3276.8, "floatValue", True, unit="C")
+        client.discovery[path] = missing
+        client.responses[path] = missing
+        coordinator = BoschDataUpdateCoordinator(hass, client, config_entry=None)
+        await coordinator._async_setup()
+        assert coordinator.discovered_endpoints[path].value is None
+        unregister = coordinator.register_path(path)
+        try:
+            for reading in (-3276.8, 20.5, -3276.8, 21.0):
+                client.responses[path] = BoschEndpoint(
+                    path, reading, "floatValue", True, unit="C"
+                )
+                data = await coordinator._async_update_data()
+                assert data[path].writable
+                assert data[path].value == (None if reading == -3276.8 else reading)
+                assert path not in coordinator.endpoint_errors
+                assert "/gateway/uuid" in data
+        finally:
+            unregister()
+
+    asyncio.run(run_test())
+
+
 def test_energy_recordings_poll_only_with_an_enabled_entity_context() -> None:
     """Supported recordings stop polling when their entity is disabled."""
 

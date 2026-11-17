@@ -23,6 +23,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import ENERGY_RECORDING_PATHS
 from .entity import BoschEntity, is_binary_endpoint, is_default_enabled_endpoint
+from .models import NUMERIC_VALUE_TYPES
 from .runtime import BoschConfigEntry, BoschRuntimeData
 
 PARALLEL_UPDATES = 0
@@ -155,8 +156,7 @@ class BoschEndpointSensor(BoschEntity, SensorEntity):
             self._attr_native_unit_of_measurement = unit.strip()
 
         if (
-            isinstance(endpoint.value, int | float)
-            and not isinstance(endpoint.value, bool)
+            endpoint.value_type in NUMERIC_VALUE_TYPES
             and self.device_class is not SensorDeviceClass.ENERGY
         ):
             self._attr_state_class = SensorStateClass.MEASUREMENT
